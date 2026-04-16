@@ -6,6 +6,8 @@ namespace NewProject.World;
 
 public static class WorldMeshBuilder
 {
+    public static BlockTextureAtlas TextureAtlas { get; set; }
+
     public static WorldMeshData BuildChunk(InfiniteWorld world, WorldChunk chunk)
     {
         List<VoxelVertex> vertices = new();
@@ -104,13 +106,14 @@ public static class WorldMeshBuilder
         Vector3 c,
         Vector3 d)
     {
-        Color color = BlockPalette.GetFaceColor(blockType, faceDirection);
+        Color color = BlockPalette.GetFaceTint(blockType, faceDirection);
+        Vector2[] uvs = TextureAtlas.GetFaceUvs(BlockPalette.GetTexture(blockType, faceDirection));
         int start = vertices.Count;
 
-        vertices.Add(new VoxelVertex(a, normal, color));
-        vertices.Add(new VoxelVertex(b, normal, color));
-        vertices.Add(new VoxelVertex(c, normal, color));
-        vertices.Add(new VoxelVertex(d, normal, color));
+        vertices.Add(new VoxelVertex(a, normal, color, uvs[0]));
+        vertices.Add(new VoxelVertex(b, normal, color, uvs[1]));
+        vertices.Add(new VoxelVertex(c, normal, color, uvs[2]));
+        vertices.Add(new VoxelVertex(d, normal, color, uvs[3]));
 
         indices.Add(start);
         indices.Add(start + 1);

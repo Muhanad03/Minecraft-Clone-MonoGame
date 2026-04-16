@@ -21,12 +21,24 @@ float3 FogColor;
 float FogStart;
 float FogEnd;
 float Time;
+texture BlockAtlas;
+
+sampler AtlasSampler = sampler_state
+{
+    Texture = <BlockAtlas>;
+    MinFilter = Point;
+    MagFilter = Point;
+    MipFilter = Point;
+    AddressU = Clamp;
+    AddressV = Clamp;
+};
 
 struct VertexInput
 {
     float4 Position : POSITION0;
     float3 Normal : NORMAL0;
     float4 Color : COLOR0;
+    float2 TexCoord : TEXCOORD0;
 };
 
 struct VertexOutput
@@ -36,6 +48,7 @@ struct VertexOutput
     float3 WorldNormal : TEXCOORD1;
     float4 Color : COLOR0;
     float3 ViewDirection : TEXCOORD2;
+    float2 TexCoord : TEXCOORD3;
 };
 
 VertexOutput MainVS(VertexInput input)
@@ -49,6 +62,7 @@ VertexOutput MainVS(VertexInput input)
     output.WorldNormal = normalize(mul(input.Normal, (float3x3)World));
     output.Color = input.Color;
     output.ViewDirection = normalize(CameraPosition - worldPosition.xyz);
+    output.TexCoord = input.TexCoord;
 
     return output;
 }
@@ -69,7 +83,8 @@ float4 MainPS(VertexOutput input) : COLOR0
     float variationMask = worldVariation * 0.035;
     float heightTint = saturate(input.WorldPosition.y / 24.0) * 0.08;
 
-    float3 baseColor = saturate(input.Color.rgb + variationMask.xxx + float3(heightTint * 0.3, heightTint * 0.45, heightTint * 0.15));
+    float4 texColor = tex2D(AtlasSampler, input.TexCoord);
+    float3 baseColor = saturate(texColor.rgb * input.Color.rgb + variationMask.xxx + float3(heightTint * 0.3, heightTint * 0.45, heightTint * 0.15));
     float3 ambient = AmbientColor * lerp(0.82, 1.12, topLight);
     float3 sunlight = SunColor * wrappedDiffuse * 0.72;
     float3 rimLight = lerp(HorizonColor, ZenithColor, topLight) * fresnel * 0.18;
@@ -88,7 +103,7 @@ float4 MainPS(VertexOutput input) : COLOR0
     float3 finalColor = lerp(litColor, atmosphericFog, fogFactor);
     finalColor = pow(saturate(finalColor), 1.0 / 1.1);
 
-    return float4(finalColor, input.Color.a);
+    return float4(finalColor, texColor.a * input.Color.a);
 }
 
 technique VoxelTerrain

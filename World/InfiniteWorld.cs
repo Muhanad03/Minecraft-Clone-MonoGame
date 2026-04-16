@@ -102,6 +102,41 @@ public sealed class InfiniteWorld : IBlockWorld
         return chunk.Voxels.IsSolid(localX, y, localZ);
     }
 
+    public BlockType GetBlock(int x, int y, int z)
+    {
+        if (y < 0 || y >= Height)
+        {
+            return BlockType.Air;
+        }
+
+        Point chunkCoord = GetChunkCoordinate(x, z);
+        WorldChunk chunk = GetOrCreateChunk(chunkCoord.X, chunkCoord.Y);
+        int localX = PositiveModulo(x, ChunkSize);
+        int localZ = PositiveModulo(z, ChunkSize);
+        return chunk.Voxels.GetBlock(localX, y, localZ);
+    }
+
+    public bool SetBlock(int x, int y, int z, BlockType block)
+    {
+        if (y < 0 || y >= Height)
+        {
+            return false;
+        }
+
+        Point chunkCoord = GetChunkCoordinate(x, z);
+        WorldChunk chunk = GetOrCreateChunk(chunkCoord.X, chunkCoord.Y);
+        int localX = PositiveModulo(x, ChunkSize);
+        int localZ = PositiveModulo(z, ChunkSize);
+        BlockType existing = chunk.Voxels.GetBlock(localX, y, localZ);
+        if (existing == block)
+        {
+            return false;
+        }
+
+        chunk.Voxels.SetBlock(localX, y, localZ, block);
+        return true;
+    }
+
     public int GetSurfaceHeight(int x, int z)
     {
         Point chunkCoord = GetChunkCoordinate(x, z);

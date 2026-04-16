@@ -31,6 +31,10 @@ public sealed class PlayerController
 
     public Vector3 CameraPosition => _position + new Vector3(0f, EyeOffset, 0f);
 
+    public BoundingBox Bounds => new(
+        new Vector3(_position.X - HalfWidth, _position.Y, _position.Z - HalfWidth),
+        new Vector3(_position.X + HalfWidth, _position.Y + Height, _position.Z + HalfWidth));
+
     public Matrix ViewMatrix => Matrix.CreateLookAt(CameraPosition, CameraPosition + GetLookDirection(), Vector3.Up);
 
     public Matrix GetProjectionMatrix(float aspectRatio)
@@ -139,7 +143,7 @@ public sealed class PlayerController
         return movement;
     }
 
-    private Vector3 GetLookDirection()
+    public Vector3 GetLookDirection()
     {
         Matrix rotation = Matrix.CreateFromYawPitchRoll(_yaw, _pitch, 0f);
         return Vector3.Transform(Vector3.Forward, rotation);

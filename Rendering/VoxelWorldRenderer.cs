@@ -10,17 +10,42 @@ namespace NewProject.Rendering;
 public sealed class VoxelWorldRenderer : IDisposable
 {
     public static readonly Color SkyColor = new(130, 190, 255);
+    public static readonly Vector3 LightDirection = Vector3.Normalize(new Vector3(-0.45f, -0.9f, 0.22f));
+    private static readonly int[] SunPattern =
+    [
+        0,0,1,1,1,1,1,1,0,0,
+        0,1,1,1,1,1,1,1,1,0,
+        1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,
+        1,1,1,1,1,1,1,1,1,1,
+        0,1,1,1,1,1,1,1,1,0,
+        0,0,1,1,1,1,1,1,0,0
+    ];
+    private const int SunColumns = 10;
 
     private readonly GraphicsDevice _graphicsDevice;
     private readonly RasterizerState _rasterizerState;
+    private readonly BlockTextureAtlas _blockTextureAtlas;
     private readonly Effect _effect;
+    private readonly BasicEffect _unlitEffect;
     private readonly Dictionary<Point, ChunkRenderData> _chunkMeshes = new();
     private readonly Queue<Point> _pendingBuilds = new();
 
     public VoxelWorldRenderer(GraphicsDevice graphicsDevice, ContentManager content)
     {
         _graphicsDevice = graphicsDevice;
+        _blockTextureAtlas = new BlockTextureAtlas(graphicsDevice, content);
         _effect = content.Load<Effect>("Effects/VoxelEffect");
+        WorldMeshBuilder.TextureAtlas = _blockTextureAtlas;
+        _unlitEffect = new BasicEffect(graphicsDevice)
+        {
+            VertexColorEnabled = true,
+            LightingEnabled = false,
+            TextureEnabled = false
+        };
         _rasterizerState = new RasterizerState
         {
             CullMode = CullMode.None
@@ -100,21 +125,25 @@ public sealed class VoxelWorldRenderer : IDisposable
         }
     }
 
+    public void MarkChunkDirty(Point chunkKey)
+    {
+        if (!_pendingBuilds.Contains(chunkKey))
+        {
+            _pendingBuilds.Enqueue(chunkKey);
+        }
+    }
+
     public void Draw(Vector3 cameraPosition, Matrix view, Matrix projection, float time)
     {
-        if (_chunkMeshes.Count == 0)
-        {
-            return;
-        }
-
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _rasterizerState;
         _effect.Parameters["World"]?.SetValue(Matrix.Identity);
         _effect.Parameters["View"]?.SetValue(view);
         _effect.Parameters["Projection"]?.SetValue(projection);
         _effect.Parameters["CameraPosition"]?.SetValue(cameraPosition);
+        _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
         _effect.Parameters["Time"]?.SetValue(time);
-        _effect.Parameters["SunDirection"]?.SetValue(Vector3.Normalize(new Vector3(-0.45f, -0.9f, 0.22f)));
+        _effect.Parameters["SunDirection"]?.SetValue(LightDirection);
         _effect.Parameters["AmbientColor"]?.SetValue(new Vector3(0.33f, 0.41f, 0.5f));
         _effect.Parameters["SunColor"]?.SetValue(new Vector3(1.0f, 0.92f, 0.78f));
         _effect.Parameters["HorizonColor"]?.SetValue(new Vector3(0.62f, 0.79f, 0.98f));
@@ -133,7 +162,11 @@ public sealed class VoxelWorldRenderer : IDisposable
                 _graphicsDevice.Indices = chunkMesh.IndexBuffer;
                 _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, chunkMesh.PrimitiveCount);
             }
+
+            DrawCloudLayer(cameraPosition, time);
         }
+
+        DrawSun(cameraPosition, view, projection);
     }
 
     public void Dispose()
@@ -145,6 +178,8 @@ public sealed class VoxelWorldRenderer : IDisposable
 
         _chunkMeshes.Clear();
         _pendingBuilds.Clear();
+        _blockTextureAtlas.Texture.Dispose();
+        _unlitEffect.Dispose();
         _effect.Dispose();
         _rasterizerState.Dispose();
     }
@@ -163,5 +198,292 @@ public sealed class VoxelWorldRenderer : IDisposable
             IndexBuffer = indexBuffer,
             PrimitiveCount = mesh.Indices.Length / 3
         };
+    }
+
+    private void DrawCloudLayer(Vector3 cameraPosition, float time)
+    {
+        const float cloudHeight = 90f;
+        const float cloudThickness = 2.25f;
+        const float cloudBlockSize = 6f;
+        const float cloudSpacing = 64f;
+        const int cloudRadius = 4;
+
+        List<VoxelVertex> vertices = new();
+        List<short> indices = new();
+
+        int centerCellX = (int)MathF.Floor(cameraPosition.X / cloudSpacing);
+        int centerCellZ = (int)MathF.Floor(cameraPosition.Z / cloudSpacing);
+        float drift = time * 2.4f;
+
+        for (int cellZ = centerCellZ - cloudRadius; cellZ <= centerCellZ + cloudRadius; cellZ++)
+        {
+            for (int cellX = centerCellX - cloudRadius; cellX <= centerCellX + cloudRadius; cellX++)
+            {
+                int hash = Hash(cellX, cellZ, 4049);
+                if ((hash % 100) > 62)
+                {
+                    continue;
+                }
+
+                float anchorX = cellX * cloudSpacing + ((hash >> 4) % 24) - 12f + drift;
+                float anchorZ = cellZ * cloudSpacing + ((hash >> 8) % 24) - 12f;
+                AddCloudShape(
+                    vertices,
+                    indices,
+                    new Vector3(anchorX, cloudHeight, anchorZ),
+                    cellX,
+                    cellZ,
+                    hash,
+                    cloudBlockSize,
+                    cloudThickness);
+            }
+        }
+
+        if (vertices.Count == 0 || indices.Count == 0)
+        {
+            return;
+        }
+
+        _graphicsDevice.DrawUserIndexedPrimitives(
+            PrimitiveType.TriangleList,
+            vertices.ToArray(),
+            0,
+            vertices.Count,
+            indices.ToArray(),
+            0,
+            indices.Count / 3,
+            VoxelVertex.VertexDeclaration);
+    }
+
+    private void DrawSun(Vector3 cameraPosition, Matrix view, Matrix projection)
+    {
+        const float sunDistance = 220f;
+        const float sunBlockSize = 4.5f;
+        const float sunThickness = 0.8f;
+
+        Vector3 sunForward = Vector3.Normalize(-LightDirection);
+        Vector3 sunRight = Vector3.Normalize(Vector3.Cross(Vector3.Up, sunForward));
+        if (sunRight.LengthSquared() < 0.001f)
+        {
+            sunRight = Vector3.Right;
+        }
+
+        Vector3 sunUp = Vector3.Normalize(Vector3.Cross(sunForward, sunRight));
+        Vector3 center = cameraPosition + sunForward * sunDistance;
+        Vector2 halfSize = new(SunColumns * sunBlockSize * 0.5f, (SunPattern.Length / SunColumns) * sunBlockSize * 0.5f);
+
+        List<VoxelVertex> vertices = new();
+        List<short> indices = new();
+
+        for (int i = 0; i < SunPattern.Length; i++)
+        {
+            if (SunPattern[i] == 0)
+            {
+                continue;
+            }
+
+            int x = i % SunColumns;
+            int y = i / SunColumns;
+            float localX = x * sunBlockSize - halfSize.X;
+            float localY = halfSize.Y - y * sunBlockSize;
+
+            Vector3 blockCenter = center + sunRight * localX + sunUp * localY;
+            AddOrientedBox(vertices, indices, blockCenter, sunRight, sunUp, sunForward, sunBlockSize, sunThickness);
+        }
+
+        if (vertices.Count == 0)
+        {
+            return;
+        }
+
+        _unlitEffect.World = Matrix.Identity;
+        _unlitEffect.View = view;
+        _unlitEffect.Projection = projection;
+
+        foreach (EffectPass pass in _unlitEffect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+            _graphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                vertices.ToArray(),
+                0,
+                vertices.Count,
+                indices.ToArray(),
+                0,
+                indices.Count / 3,
+                VoxelVertex.VertexDeclaration);
+        }
+    }
+
+    private static void AddCloudShape(
+        List<VoxelVertex> vertices,
+        List<short> indices,
+        Vector3 anchor,
+        int cellX,
+        int cellZ,
+        int seed,
+        float blockSize,
+        float thickness)
+    {
+        const int columns = 12;
+        const int rows = 6;
+
+        int centerX = 3 + (seed % 6);
+        int centerZ = 2 + ((seed >> 3) % 2);
+        int radiusX = 3 + ((seed >> 5) % 3);
+        int radiusZ = 2 + ((seed >> 8) % 2);
+        float edgeNoise = 0.9f + ((seed >> 11) % 40) / 100f;
+
+        for (int z = 0; z < rows; z++)
+        {
+            for (int x = 0; x < columns; x++)
+            {
+                float dx = (x - centerX) / (float)radiusX;
+                float dz = (z - centerZ) / (float)radiusZ;
+                float ellipse = dx * dx + dz * dz;
+
+                int localHash = Hash(cellX * 31 + x, cellZ * 31 + z, seed);
+                float wobble = ((localHash % 100) / 100f - 0.5f) * 0.55f;
+                bool carvePocket = ((localHash >> 7) % 100) < 16 && ellipse > 0.35f;
+                bool keep = ellipse + wobble < edgeNoise && !carvePocket;
+
+                if (!keep)
+                {
+                    continue;
+                }
+
+                bool trimCorner =
+                    ((x == 0 || x == columns - 1) && (z == 0 || z == rows - 1)) ||
+                    (((localHash >> 11) % 100) < 10 && ellipse > 0.75f);
+
+                if (trimCorner)
+                {
+                    continue;
+                }
+
+                Vector3 min = anchor + new Vector3(x * blockSize, 0f, z * blockSize);
+                Vector3 max = min + new Vector3(blockSize, thickness, blockSize);
+                AddBox(vertices, indices, min, max);
+            }
+        }
+    }
+
+    private static void AddBox(List<VoxelVertex> vertices, List<short> indices, Vector3 min, Vector3 max)
+    {
+        Color top = new(251, 253, 255);
+        Color side = new(235, 242, 252);
+        Color bottom = new(219, 228, 242);
+        Vector2 uv = Vector2.Zero;
+
+        AddFace(vertices, indices, Vector3.Up, top, uv,
+            new Vector3(min.X, max.Y, min.Z),
+            new Vector3(max.X, max.Y, min.Z),
+            new Vector3(max.X, max.Y, max.Z),
+            new Vector3(min.X, max.Y, max.Z));
+
+        AddFace(vertices, indices, Vector3.Down, bottom, uv,
+            new Vector3(min.X, min.Y, max.Z),
+            new Vector3(max.X, min.Y, max.Z),
+            new Vector3(max.X, min.Y, min.Z),
+            new Vector3(min.X, min.Y, min.Z));
+
+        AddFace(vertices, indices, Vector3.Left, side, uv,
+            new Vector3(min.X, min.Y, min.Z),
+            new Vector3(min.X, min.Y, max.Z),
+            new Vector3(min.X, max.Y, max.Z),
+            new Vector3(min.X, max.Y, min.Z));
+
+        AddFace(vertices, indices, Vector3.Right, side, uv,
+            new Vector3(max.X, min.Y, max.Z),
+            new Vector3(max.X, min.Y, min.Z),
+            new Vector3(max.X, max.Y, min.Z),
+            new Vector3(max.X, max.Y, max.Z));
+
+        AddFace(vertices, indices, Vector3.Backward, side, uv,
+            new Vector3(max.X, min.Y, min.Z),
+            new Vector3(min.X, min.Y, min.Z),
+            new Vector3(min.X, max.Y, min.Z),
+            new Vector3(max.X, max.Y, min.Z));
+
+        AddFace(vertices, indices, Vector3.Forward, side, uv,
+            new Vector3(min.X, min.Y, max.Z),
+            new Vector3(max.X, min.Y, max.Z),
+            new Vector3(max.X, max.Y, max.Z),
+            new Vector3(min.X, max.Y, max.Z));
+    }
+
+    private static void AddOrientedBox(
+        List<VoxelVertex> vertices,
+        List<short> indices,
+        Vector3 center,
+        Vector3 right,
+        Vector3 up,
+        Vector3 forward,
+        float size,
+        float thickness)
+    {
+        Vector3 halfRight = right * (size * 0.5f);
+        Vector3 halfUp = up * (size * 0.5f);
+        Vector3 halfForward = forward * (thickness * 0.5f);
+
+        Vector3 lbf = center - halfRight - halfUp - halfForward;
+        Vector3 rbf = center + halfRight - halfUp - halfForward;
+        Vector3 rtf = center + halfRight + halfUp - halfForward;
+        Vector3 ltf = center - halfRight + halfUp - halfForward;
+        Vector3 lbb = center - halfRight - halfUp + halfForward;
+        Vector3 rbb = center + halfRight - halfUp + halfForward;
+        Vector3 rtb = center + halfRight + halfUp + halfForward;
+        Vector3 ltb = center - halfRight + halfUp + halfForward;
+
+        Color front = new(255, 245, 170);
+        Color edge = new(255, 214, 120);
+        Color back = new(245, 188, 92);
+        Vector2 uv = Vector2.Zero;
+
+        AddFace(vertices, indices, -forward, front, uv, ltf, rtf, rbf, lbf);
+        AddFace(vertices, indices, forward, back, uv, lbb, rbb, rtb, ltb);
+        AddFace(vertices, indices, -right, edge, uv, lbf, lbb, ltb, ltf);
+        AddFace(vertices, indices, right, edge, uv, rbb, rbf, rtf, rtb);
+        AddFace(vertices, indices, up, front, uv, ltb, rtb, rtf, ltf);
+        AddFace(vertices, indices, -up, edge, uv, lbf, rbf, rbb, lbb);
+    }
+
+    private static void AddFace(
+        List<VoxelVertex> vertices,
+        List<short> indices,
+        Vector3 normal,
+        Color color,
+        Vector2 uv,
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        Vector3 d)
+    {
+        short start = (short)vertices.Count;
+        vertices.Add(new VoxelVertex(a, normal, color, uv));
+        vertices.Add(new VoxelVertex(b, normal, color, uv));
+        vertices.Add(new VoxelVertex(c, normal, color, uv));
+        vertices.Add(new VoxelVertex(d, normal, color, uv));
+
+        indices.Add(start);
+        indices.Add((short)(start + 1));
+        indices.Add((short)(start + 2));
+        indices.Add(start);
+        indices.Add((short)(start + 2));
+        indices.Add((short)(start + 3));
+    }
+
+    private static int Hash(int x, int z, int seed)
+    {
+        unchecked
+        {
+            int value = seed;
+            value = (value * 397) ^ x;
+            value = (value * 397) ^ z;
+            value ^= value >> 13;
+            value *= 1274126177;
+            value ^= value >> 16;
+            return value & int.MaxValue;
+        }
     }
 }
