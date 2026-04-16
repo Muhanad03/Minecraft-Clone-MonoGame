@@ -27,7 +27,7 @@ public sealed class HotbarState
 
     public void HandleInput(KeyboardState keyboard, KeyboardState previousKeyboard, MouseState mouse, MouseState previousMouse)
     {
-        Keys[] numberKeys = [Keys.D1, Keys.D2, Keys.D3, Keys.D4, Keys.D5, Keys.D6, Keys.D7, Keys.D8];
+        Keys[] numberKeys = [Keys.D1, Keys.D2, Keys.D3, Keys.D4, Keys.D5, Keys.D6, Keys.D7, Keys.D8, Keys.D9];
         for (int i = 0; i < numberKeys.Length && i < HotbarDefinitions.Entries.Length; i++)
         {
             if (keyboard.IsKeyDown(numberKeys[i]) && !previousKeyboard.IsKeyDown(numberKeys[i]))

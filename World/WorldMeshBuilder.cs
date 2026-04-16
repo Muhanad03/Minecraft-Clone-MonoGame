@@ -7,14 +7,14 @@ namespace NewProject.World;
 
 public static class WorldMeshBuilder
 {
-    private static readonly Vector3 SunTraceDirection = Vector3.Normalize(-VoxelWorldRenderer.LightDirection);
-
     public static BlockTextureAtlas TextureAtlas { get; set; }
 
     public static WorldMeshData BuildChunk(InfiniteWorld world, WorldChunk chunk)
     {
-        List<VoxelVertex> vertices = new();
-        List<int> indices = new();
+        List<VoxelVertex> solidVertices = new();
+        List<int> solidIndices = new();
+        List<VoxelVertex> waterVertices = new();
+        List<int> waterIndices = new();
 
         int worldOffsetX = chunk.ChunkX * InfiniteWorld.ChunkSize;
         int worldOffsetZ = chunk.ChunkZ * InfiniteWorld.ChunkSize;
@@ -33,59 +33,60 @@ public static class WorldMeshBuilder
 
                     int globalX = worldOffsetX + x;
                     int globalZ = worldOffsetZ + z;
+                    float waterTop = block == BlockType.Water ? y + 0.88f : y + 1f;
 
-                    if (!world.IsSolidLoadedOrAir(globalX, y + 1, globalZ))
+                    if (ShouldRenderFace(world, block, globalX, y + 1, globalZ))
                     {
-                        AddFace(world, vertices, indices, block, FaceDirection.Top, Vector3.Up,
-                            new Vector3(globalX, y + 1, globalZ),
-                            new Vector3(globalX + 1, y + 1, globalZ),
-                            new Vector3(globalX + 1, y + 1, globalZ + 1),
-                            new Vector3(globalX, y + 1, globalZ + 1));
+                        AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Top, Vector3.Up,
+                            new Vector3(globalX, waterTop, globalZ),
+                            new Vector3(globalX + 1, waterTop, globalZ),
+                            new Vector3(globalX + 1, waterTop, globalZ + 1),
+                            new Vector3(globalX, waterTop, globalZ + 1));
                     }
 
-                    if (!world.IsSolidLoadedOrAir(globalX, y - 1, globalZ))
+                    if (ShouldRenderFace(world, block, globalX, y - 1, globalZ))
                     {
-                        AddFace(world, vertices, indices, block, FaceDirection.Bottom, Vector3.Down,
+                        AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Bottom, Vector3.Down,
                             new Vector3(globalX, y, globalZ + 1),
                             new Vector3(globalX + 1, y, globalZ + 1),
                             new Vector3(globalX + 1, y, globalZ),
                             new Vector3(globalX, y, globalZ));
                     }
 
-                    if (!world.IsSolidLoadedOrAir(globalX - 1, y, globalZ))
+                    if (ShouldRenderFace(world, block, globalX - 1, y, globalZ))
                     {
-                        AddFace(world, vertices, indices, block, FaceDirection.Left, Vector3.Left,
+                        AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Left, Vector3.Left,
                             new Vector3(globalX, y, globalZ),
                             new Vector3(globalX, y, globalZ + 1),
-                            new Vector3(globalX, y + 1, globalZ + 1),
-                            new Vector3(globalX, y + 1, globalZ));
+                            new Vector3(globalX, waterTop, globalZ + 1),
+                            new Vector3(globalX, waterTop, globalZ));
                     }
 
-                    if (!world.IsSolidLoadedOrAir(globalX + 1, y, globalZ))
+                    if (ShouldRenderFace(world, block, globalX + 1, y, globalZ))
                     {
-                        AddFace(world, vertices, indices, block, FaceDirection.Right, Vector3.Right,
+                        AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Right, Vector3.Right,
                             new Vector3(globalX + 1, y, globalZ + 1),
                             new Vector3(globalX + 1, y, globalZ),
-                            new Vector3(globalX + 1, y + 1, globalZ),
-                            new Vector3(globalX + 1, y + 1, globalZ + 1));
+                            new Vector3(globalX + 1, waterTop, globalZ),
+                            new Vector3(globalX + 1, waterTop, globalZ + 1));
                     }
 
-                    if (!world.IsSolidLoadedOrAir(globalX, y, globalZ - 1))
+                    if (ShouldRenderFace(world, block, globalX, y, globalZ - 1))
                     {
-                        AddFace(world, vertices, indices, block, FaceDirection.Back, Vector3.Backward,
+                        AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Back, Vector3.Backward,
                             new Vector3(globalX + 1, y, globalZ),
                             new Vector3(globalX, y, globalZ),
-                            new Vector3(globalX, y + 1, globalZ),
-                            new Vector3(globalX + 1, y + 1, globalZ));
+                            new Vector3(globalX, waterTop, globalZ),
+                            new Vector3(globalX + 1, waterTop, globalZ));
                     }
 
-                    if (!world.IsSolidLoadedOrAir(globalX, y, globalZ + 1))
+                    if (ShouldRenderFace(world, block, globalX, y, globalZ + 1))
                     {
-                        AddFace(world, vertices, indices, block, FaceDirection.Front, Vector3.Forward,
+                        AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Front, Vector3.Forward,
                             new Vector3(globalX, y, globalZ + 1),
                             new Vector3(globalX + 1, y, globalZ + 1),
-                            new Vector3(globalX + 1, y + 1, globalZ + 1),
-                            new Vector3(globalX, y + 1, globalZ + 1));
+                            new Vector3(globalX + 1, waterTop, globalZ + 1),
+                            new Vector3(globalX, waterTop, globalZ + 1));
                     }
                 }
             }
@@ -93,15 +94,19 @@ public static class WorldMeshBuilder
 
         return new WorldMeshData
         {
-            Vertices = vertices.ToArray(),
-            Indices = indices.ToArray()
+            SolidVertices = solidVertices.ToArray(),
+            SolidIndices = solidIndices.ToArray(),
+            WaterVertices = waterVertices.ToArray(),
+            WaterIndices = waterIndices.ToArray()
         };
     }
 
     private static void AddFace(
         InfiniteWorld world,
-        List<VoxelVertex> vertices,
-        List<int> indices,
+        List<VoxelVertex> solidVertices,
+        List<int> solidIndices,
+        List<VoxelVertex> waterVertices,
+        List<int> waterIndices,
         BlockType blockType,
         FaceDirection faceDirection,
         Vector3 normal,
@@ -113,19 +118,21 @@ public static class WorldMeshBuilder
         Color baseColor = BlockPalette.GetFaceTint(blockType, faceDirection);
         Vector2[] uvs = TextureAtlas.GetFaceUvs(BlockPalette.GetTexture(blockType, faceDirection));
         Color[] colors = BuildFaceColors(world, faceDirection, normal, a, b, c, d, baseColor);
-        int start = vertices.Count;
+        List<VoxelVertex> targetVertices = blockType == BlockType.Water ? waterVertices : solidVertices;
+        List<int> targetIndices = blockType == BlockType.Water ? waterIndices : solidIndices;
+        int start = targetVertices.Count;
 
-        vertices.Add(new VoxelVertex(a, normal, colors[0], uvs[0]));
-        vertices.Add(new VoxelVertex(b, normal, colors[1], uvs[1]));
-        vertices.Add(new VoxelVertex(c, normal, colors[2], uvs[2]));
-        vertices.Add(new VoxelVertex(d, normal, colors[3], uvs[3]));
+        targetVertices.Add(new VoxelVertex(a, normal, colors[0], uvs[0]));
+        targetVertices.Add(new VoxelVertex(b, normal, colors[1], uvs[1]));
+        targetVertices.Add(new VoxelVertex(c, normal, colors[2], uvs[2]));
+        targetVertices.Add(new VoxelVertex(d, normal, colors[3], uvs[3]));
 
-        indices.Add(start);
-        indices.Add(start + 1);
-        indices.Add(start + 2);
-        indices.Add(start);
-        indices.Add(start + 2);
-        indices.Add(start + 3);
+        targetIndices.Add(start);
+        targetIndices.Add(start + 1);
+        targetIndices.Add(start + 2);
+        targetIndices.Add(start);
+        targetIndices.Add(start + 2);
+        targetIndices.Add(start + 3);
     }
 
     private static Color[] BuildFaceColors(
@@ -193,5 +200,26 @@ public static class WorldMeshBuilder
             (byte)Math.Clamp((int)(color.G * scale), 0, 255),
             (byte)Math.Clamp((int)(color.B * scale), 0, 255),
             color.A);
+    }
+
+    private static bool ShouldRenderFace(InfiniteWorld world, BlockType block, int neighborX, int neighborY, int neighborZ)
+    {
+        BlockType neighbor = world.GetBlock(neighborX, neighborY, neighborZ);
+        if (neighbor == block)
+        {
+            return false;
+        }
+
+        if (block == BlockType.Water)
+        {
+            return neighbor != BlockType.Water;
+        }
+
+        if (neighbor == BlockType.Water)
+        {
+            return true;
+        }
+
+        return neighbor == BlockType.Air || !BlockPalette.IsSolid(neighbor);
     }
 }

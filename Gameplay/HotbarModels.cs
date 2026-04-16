@@ -27,6 +27,7 @@ public static class HotbarDefinitions
         new(HotbarItemKind.Block, ToolType.Pickaxe, BlockType.Grass, "Grass"),
         new(HotbarItemKind.Block, ToolType.Pickaxe, BlockType.Dirt, "Dirt"),
         new(HotbarItemKind.Block, ToolType.Pickaxe, BlockType.Stone, "Stone"),
+        new(HotbarItemKind.Block, ToolType.Pickaxe, BlockType.Sand, "Sand"),
         new(HotbarItemKind.Block, ToolType.Pickaxe, BlockType.Trunk, "Log"),
         new(HotbarItemKind.Block, ToolType.Pickaxe, BlockType.Leaves, "Leaf")
     ];

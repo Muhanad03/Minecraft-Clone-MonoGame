@@ -11,6 +11,8 @@ public enum BlockTextureId
     GrassSide,
     Dirt,
     Stone,
+    Sand,
+    Water,
     LogSide,
     LogTop,
     Leaves
@@ -28,6 +30,8 @@ public sealed class BlockTextureAtlas
             (BlockTextureId.GrassSide, "Textures/blocks/grass_side"),
             (BlockTextureId.Dirt, "Textures/blocks/dirt"),
             (BlockTextureId.Stone, "Textures/blocks/stone"),
+            (BlockTextureId.Sand, "Textures/blocks/sand"),
+            (BlockTextureId.Water, "Textures/blocks/water_still"),
             (BlockTextureId.LogSide, "Textures/blocks/log_oak"),
             (BlockTextureId.LogTop, "Textures/blocks/log_oak_top"),
             (BlockTextureId.Leaves, "Textures/blocks/leaves_oak_opaque")
@@ -41,7 +45,7 @@ public sealed class BlockTextureAtlas
 
         int tileSize = textures[0].Width;
         int columns = 4;
-        int rows = 2;
+        int rows = (entries.Length + columns - 1) / columns;
         Texture = new Texture2D(graphicsDevice, columns * tileSize, rows * tileSize);
 
         Color[] atlasData = new Color[Texture.Width * Texture.Height];
@@ -53,10 +57,13 @@ public sealed class BlockTextureAtlas
             Texture2D source = textures[i];
             Color[] sourceData = new Color[source.Width * source.Height];
             source.GetData(sourceData);
+            int frameSize = source.Width < source.Height ? source.Width : source.Height;
 
-            for (int y = 0; y < source.Height; y++)
+            // Minecraft animated textures are stored as vertical strips.
+            // We sample only the first square frame for the atlas.
+            for (int y = 0; y < frameSize; y++)
             {
-                for (int x = 0; x < source.Width; x++)
+                for (int x = 0; x < frameSize; x++)
                 {
                     int atlasX = column * tileSize + x;
                     int atlasY = row * tileSize + y;

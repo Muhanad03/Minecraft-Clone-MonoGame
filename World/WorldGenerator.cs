@@ -5,6 +5,8 @@ namespace NewProject.World;
 
 public static class WorldGenerator
 {
+    private const int SeaLevel = 11;
+
     public static VoxelWorld GenerateChunk(int chunkX, int chunkZ, int chunkSize, int height, int seed)
     {
         VoxelWorld world = new(chunkSize, height, chunkSize);
@@ -16,20 +18,21 @@ public static class WorldGenerator
                 int worldX = chunkX * chunkSize + x;
                 int worldZ = chunkZ * chunkSize + z;
                 int terrainHeight = GetTerrainHeight(worldX, worldZ, height, seed);
+                bool supportsTrees = terrainHeight > SeaLevel + 1;
 
                 for (int y = 0; y < terrainHeight; y++)
                 {
-                    BlockType block = y switch
-                    {
-                        var _ when y == terrainHeight - 1 => BlockType.Grass,
-                        var _ when y >= terrainHeight - 4 => BlockType.Dirt,
-                        _ => BlockType.Stone
-                    };
+                    BlockType block = GetTerrainBlock(y, terrainHeight);
 
                     world.SetBlock(x, y, z, block);
                 }
 
-                if (ShouldPlaceTree(worldX, worldZ, terrainHeight, seed))
+                for (int y = Math.Max(terrainHeight, 0); y <= SeaLevel && y < height; y++)
+                {
+                    world.SetBlock(x, y, z, BlockType.Water);
+                }
+
+                if (supportsTrees && ShouldPlaceTree(worldX, worldZ, terrainHeight, seed))
                 {
                     PlaceTree(world, x, terrainHeight, z, seed);
                 }
@@ -41,25 +44,60 @@ public static class WorldGenerator
 
     private static int GetTerrainHeight(int x, int z, int worldHeight, int seed)
     {
-        float continental = FractalNoise(x * 0.045f, z * 0.045f, seed, 4, 0.55f);
-        float detail = FractalNoise(x * 0.12f, z * 0.12f, seed + 17, 3, 0.5f);
-        float ridges = 1f - MathF.Abs(FractalNoise(x * 0.07f, z * 0.07f, seed + 93, 3, 0.5f) * 2f - 1f);
+        float distance = MathF.Sqrt(x * x + z * z);
+        float islandRadius = 120f;
+        float falloff = 1f - MathHelper.Clamp(distance / islandRadius, 0f, 1f);
+        falloff = falloff * falloff * (3f - 2f * falloff);
 
-        float shaped = continental * 0.65f + detail * 0.2f + ridges * 0.15f;
-        int height = (int)MathF.Round(MathHelper.Lerp(6f, worldHeight - 9f, shaped));
-        return Math.Clamp(height, 4, worldHeight - 6);
+        float continental = FractalNoise(x * 0.035f, z * 0.035f, seed, 4, 0.55f);
+        float hills = FractalNoise(x * 0.085f, z * 0.085f, seed + 17, 3, 0.5f);
+        float ridges = 1f - MathF.Abs(FractalNoise(x * 0.06f, z * 0.06f, seed + 93, 3, 0.5f) * 2f - 1f);
+        float shapedNoise = continental * 0.55f + hills * 0.25f + ridges * 0.20f;
+
+        float landShape = MathHelper.Clamp(falloff * (0.75f + shapedNoise * 0.45f), 0f, 1f);
+        float baseHeight = MathHelper.Lerp(SeaLevel - 5f, worldHeight - 8f, landShape);
+        float height = MathHelper.Lerp(SeaLevel - 3f, baseHeight, falloff);
+
+        if (falloff < 0.22f)
+        {
+            height = MathHelper.Lerp(height, SeaLevel, 1f - falloff / 0.22f);
+        }
+
+        return Math.Clamp((int)MathF.Round(height), 3, worldHeight - 6);
+    }
+
+    private static BlockType GetTerrainBlock(int y, int terrainHeight)
+    {
+        bool beachOrSeafloor = terrainHeight <= SeaLevel + 1;
+
+        if (y == terrainHeight - 1)
+        {
+            return beachOrSeafloor ? BlockType.Sand : BlockType.Grass;
+        }
+
+        if (y >= terrainHeight - 3)
+        {
+            return beachOrSeafloor ? BlockType.Sand : BlockType.Dirt;
+        }
+
+        if (beachOrSeafloor && y >= terrainHeight - 5)
+        {
+            return BlockType.Sand;
+        }
+
+        return BlockType.Stone;
     }
 
     private static bool ShouldPlaceTree(int x, int z, int terrainHeight, int seed)
     {
-        if (terrainHeight < 8)
+        if (terrainHeight <= SeaLevel + 1)
         {
             return false;
         }
 
         float chance = FractalNoise(x * 0.21f, z * 0.21f, seed + 211, 2, 0.55f);
         float spacing = FractalNoise(x * 0.08f, z * 0.08f, seed + 503, 1, 0.5f);
-        return chance > 0.72f && spacing > 0.48f;
+        return chance > 0.7f && spacing > 0.5f;
     }
 
     private static void PlaceTree(VoxelWorld world, int baseX, int baseY, int baseZ, int seed)

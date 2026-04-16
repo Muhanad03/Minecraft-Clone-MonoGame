@@ -17,3 +17,16 @@ public sealed class ChunkRenderData : IDisposable
         IndexBuffer.Dispose();
     }
 }
+
+public sealed class ChunkRenderSet : IDisposable
+{
+    public required ChunkRenderData Solid { get; init; }
+
+    public ChunkRenderData? Water { get; init; }
+
+    public void Dispose()
+    {
+        Solid.Dispose();
+        Water?.Dispose();
+    }
+}

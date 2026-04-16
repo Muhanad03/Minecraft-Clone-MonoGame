@@ -35,7 +35,7 @@ public sealed class VoxelWorldRenderer : IDisposable
     private readonly BasicEffect _cloudEffect;
     private readonly BasicEffect _viewModelColorEffect;
     private readonly BasicEffect _viewModelTextureEffect;
-    private readonly Dictionary<Point, ChunkRenderData> _chunkMeshes = new();
+    private readonly Dictionary<Point, ChunkRenderSet> _chunkMeshes = new();
     private readonly Queue<Point> _pendingBuilds = new();
     private ChunkRenderData? _cloudRenderData;
     private Point _cloudMeshCenterCell;
@@ -141,9 +141,9 @@ public sealed class VoxelWorldRenderer : IDisposable
             }
 
             WorldMeshData mesh = WorldMeshBuilder.BuildChunk(world, chunk);
-            ChunkRenderData renderData = CreateChunkRenderData(mesh);
+            ChunkRenderSet renderData = CreateChunkRenderData(mesh);
 
-            if (_chunkMeshes.TryGetValue(key, out ChunkRenderData existing))
+            if (_chunkMeshes.TryGetValue(key, out ChunkRenderSet existing))
             {
                 existing.Dispose();
             }
@@ -185,14 +185,15 @@ public sealed class VoxelWorldRenderer : IDisposable
         {
             pass.Apply();
 
-            foreach (ChunkRenderData chunkMesh in _chunkMeshes.Values)
+            foreach (ChunkRenderSet chunkMesh in _chunkMeshes.Values)
             {
-                _graphicsDevice.SetVertexBuffer(chunkMesh.VertexBuffer);
-                _graphicsDevice.Indices = chunkMesh.IndexBuffer;
-                _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, chunkMesh.PrimitiveCount);
+                _graphicsDevice.SetVertexBuffer(chunkMesh.Solid.VertexBuffer);
+                _graphicsDevice.Indices = chunkMesh.Solid.IndexBuffer;
+                _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, chunkMesh.Solid.PrimitiveCount);
             }
-
         }
+
+        DrawWater(view, projection, cameraPosition, time);
 
         DrawCloudLayer(cameraPosition, time, view, projection);
         DrawSun(cameraPosition, view, projection);
@@ -417,7 +418,7 @@ public sealed class VoxelWorldRenderer : IDisposable
 
     public void Dispose()
     {
-        foreach (ChunkRenderData chunkMesh in _chunkMeshes.Values)
+        foreach (ChunkRenderSet chunkMesh in _chunkMeshes.Values)
         {
             chunkMesh.Dispose();
         }
@@ -434,12 +435,19 @@ public sealed class VoxelWorldRenderer : IDisposable
         _rasterizerState.Dispose();
     }
 
-    private ChunkRenderData CreateChunkRenderData(WorldMeshData mesh)
+    private ChunkRenderSet CreateChunkRenderData(WorldMeshData mesh)
     {
-        return CreateChunkRenderData(mesh.Vertices, mesh.Indices);
+        ChunkRenderData solid = CreateBufferData(mesh.SolidVertices, mesh.SolidIndices);
+        ChunkRenderData? water = mesh.WaterIndices.Length > 0 ? CreateBufferData(mesh.WaterVertices, mesh.WaterIndices) : null;
+
+        return new ChunkRenderSet
+        {
+            Solid = solid,
+            Water = water
+        };
     }
 
-    private ChunkRenderData CreateChunkRenderData(VoxelVertex[] vertices, int[] indices)
+    private ChunkRenderData CreateBufferData(VoxelVertex[] vertices, int[] indices)
     {
         VertexBuffer vertexBuffer = new(_graphicsDevice, VoxelVertex.VertexDeclaration, vertices.Length, BufferUsage.WriteOnly);
         vertexBuffer.SetData(vertices);
@@ -453,6 +461,37 @@ public sealed class VoxelWorldRenderer : IDisposable
             IndexBuffer = indexBuffer,
             PrimitiveCount = indices.Length / 3
         };
+    }
+
+    private void DrawWater(Matrix view, Matrix projection, Vector3 cameraPosition, float time)
+    {
+        _graphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
+        _graphicsDevice.RasterizerState = _rasterizerState;
+        _graphicsDevice.BlendState = BlendState.AlphaBlend;
+
+        _effect.Parameters["World"]?.SetValue(Matrix.Identity);
+        _effect.Parameters["View"]?.SetValue(view);
+        _effect.Parameters["Projection"]?.SetValue(projection);
+        _effect.Parameters["CameraPosition"]?.SetValue(cameraPosition);
+        _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
+        _effect.Parameters["Time"]?.SetValue(time);
+
+        foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+
+            foreach (ChunkRenderSet chunkMesh in _chunkMeshes.Values)
+            {
+                if (chunkMesh.Water is null)
+                {
+                    continue;
+                }
+
+                _graphicsDevice.SetVertexBuffer(chunkMesh.Water.VertexBuffer);
+                _graphicsDevice.Indices = chunkMesh.Water.IndexBuffer;
+                _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, chunkMesh.Water.PrimitiveCount);
+            }
+        }
     }
 
     private void DrawCloudLayer(Vector3 cameraPosition, float time, Matrix view, Matrix projection)
@@ -551,7 +590,7 @@ public sealed class VoxelWorldRenderer : IDisposable
             return null;
         }
 
-        return CreateChunkRenderData(vertices.ToArray(), indices.ToArray());
+        return CreateBufferData(vertices.ToArray(), indices.ToArray());
     }
 
     private void DrawSun(Vector3 cameraPosition, Matrix view, Matrix projection)
