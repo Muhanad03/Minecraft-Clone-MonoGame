@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Content;
 using Microsoft.Xna.Framework.Graphics;
+using NewProject.Gameplay;
 using NewProject.World;
 
 namespace NewProject.Rendering;
@@ -31,8 +32,16 @@ public sealed class VoxelWorldRenderer : IDisposable
     private readonly BlockTextureAtlas _blockTextureAtlas;
     private readonly Effect _effect;
     private readonly BasicEffect _unlitEffect;
+    private readonly BasicEffect _cloudEffect;
+    private readonly BasicEffect _viewModelColorEffect;
+    private readonly BasicEffect _viewModelTextureEffect;
     private readonly Dictionary<Point, ChunkRenderData> _chunkMeshes = new();
     private readonly Queue<Point> _pendingBuilds = new();
+    private ChunkRenderData? _cloudRenderData;
+    private Point _cloudMeshCenterCell;
+    private bool _cloudMeshValid;
+
+    public ViewModelSettings ViewModelSettings { get; } = new();
 
     public VoxelWorldRenderer(GraphicsDevice graphicsDevice, ContentManager content)
     {
@@ -45,6 +54,24 @@ public sealed class VoxelWorldRenderer : IDisposable
             VertexColorEnabled = true,
             LightingEnabled = false,
             TextureEnabled = false
+        };
+        _cloudEffect = new BasicEffect(graphicsDevice)
+        {
+            VertexColorEnabled = true,
+            LightingEnabled = false,
+            TextureEnabled = false
+        };
+        _viewModelColorEffect = new BasicEffect(graphicsDevice)
+        {
+            VertexColorEnabled = true,
+            LightingEnabled = false,
+            TextureEnabled = false
+        };
+        _viewModelTextureEffect = new BasicEffect(graphicsDevice)
+        {
+            VertexColorEnabled = true,
+            LightingEnabled = false,
+            TextureEnabled = true
         };
         _rasterizerState = new RasterizerState
         {
@@ -137,6 +164,7 @@ public sealed class VoxelWorldRenderer : IDisposable
     {
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _rasterizerState;
+        _graphicsDevice.BlendState = BlendState.Opaque;
         _effect.Parameters["World"]?.SetValue(Matrix.Identity);
         _effect.Parameters["View"]?.SetValue(view);
         _effect.Parameters["Projection"]?.SetValue(projection);
@@ -144,11 +172,12 @@ public sealed class VoxelWorldRenderer : IDisposable
         _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
         _effect.Parameters["Time"]?.SetValue(time);
         _effect.Parameters["SunDirection"]?.SetValue(LightDirection);
-        _effect.Parameters["AmbientColor"]?.SetValue(new Vector3(0.33f, 0.41f, 0.5f));
-        _effect.Parameters["SunColor"]?.SetValue(new Vector3(1.0f, 0.92f, 0.78f));
+        _effect.Parameters["AmbientColor"]?.SetValue(new Vector3(0.92f, 0.96f, 1.0f));
+        _effect.Parameters["SunColor"]?.SetValue(new Vector3(1.05f, 1.0f, 0.94f));
         _effect.Parameters["HorizonColor"]?.SetValue(new Vector3(0.62f, 0.79f, 0.98f));
         _effect.Parameters["ZenithColor"]?.SetValue(new Vector3(0.19f, 0.43f, 0.85f));
         _effect.Parameters["FogColor"]?.SetValue(new Vector3(0.71f, 0.84f, 0.98f));
+        _effect.Parameters["ShadowColor"]?.SetValue(new Vector3(1.0f, 1.0f, 1.0f));
         _effect.Parameters["FogStart"]?.SetValue(24f);
         _effect.Parameters["FogEnd"]?.SetValue(120f);
 
@@ -163,10 +192,227 @@ public sealed class VoxelWorldRenderer : IDisposable
                 _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, chunkMesh.PrimitiveCount);
             }
 
-            DrawCloudLayer(cameraPosition, time);
         }
 
+        DrawCloudLayer(cameraPosition, time, view, projection);
         DrawSun(cameraPosition, view, projection);
+    }
+
+    public void DrawViewModel(
+        Vector3 cameraPosition,
+        Matrix view,
+        Matrix projection,
+        Texture2D texture,
+        bool isTool,
+        ToolType? selectedTool,
+        float useAnimationTimer,
+        float useAnimationDuration)
+    {
+        if (texture is null)
+        {
+            return;
+        }
+
+        float progress = useAnimationDuration <= 0f
+            ? 1f
+            : 1f - Math.Clamp(useAnimationTimer / useAnimationDuration, 0f, 1f);
+        float swing = MathF.Sin(progress * progress * MathHelper.Pi);
+        float settle = MathF.Sin(MathF.Sqrt(Math.Max(progress, 0f)) * MathHelper.Pi);
+        bool swordSlash = isTool && selectedTool == ToolType.Sword;
+
+        Matrix cameraWorld = Matrix.Invert(view);
+        Vector3 right = Vector3.Normalize(cameraWorld.Right);
+        Vector3 up = Vector3.Normalize(cameraWorld.Up);
+        Vector3 forward = Vector3.Normalize(cameraWorld.Forward);
+        ViewModelSettings settings = ViewModelSettings;
+
+        Vector3 basePosition =
+            cameraPosition +
+            right * (settings.BaseRightOffset - swing * settings.BaseRightSwing) +
+            up * (settings.BaseUpOffset - settle * settings.BaseUpSettle) +
+            forward * (settings.BaseForwardOffset + swing * settings.BaseForwardSwing);
+
+        if (swordSlash)
+        {
+            basePosition +=
+                right * (-swing * settings.SwordSlashSideSwing) +
+                up * (-settle * settings.SwordSlashUpSwing) +
+                forward * (swing * settings.SwordSlashForwardSwing);
+        }
+
+        Vector3 armDirection = 
+            forward * settings.ArmForwardFactor +
+            right * settings.ArmRightFactor +
+            up * settings.ArmUpFactor;
+
+        if (swordSlash)
+        {
+            armDirection +=
+                forward * (swing * settings.SwordSlashForwardFactorBoost) +
+                right * (swing * settings.SwordSlashRightFactorBoost) +
+                up * (swing * settings.SwordSlashUpFactorBoost);
+        }
+
+        Vector3 armForward = Vector3.Normalize(armDirection);
+        Vector3 armRight = Vector3.Normalize(Vector3.Cross(up, armForward));
+        if (armRight.LengthSquared() < 0.001f)
+        {
+            armRight = right;
+        }
+
+        Vector3 armUp = Vector3.Normalize(Vector3.Cross(armForward, armRight));
+
+        List<VoxelVertex> armVertices = new();
+        List<int> armIndices = new();
+        AddOrientedBox(
+            armVertices,
+            armIndices,
+            basePosition,
+            armRight,
+            armUp,
+            armForward,
+            new Vector3(settings.ArmWidth, settings.ArmHeight, settings.ArmLength),
+            new Color(72, 136, 162),
+            new Color(63, 118, 144));
+
+        Vector3 handCenter =
+            basePosition +
+            armForward * settings.HandForwardOffset +
+            armUp * settings.HandUpOffset +
+            armRight * settings.HandSideOffset;
+        AddOrientedBox(
+            armVertices,
+            armIndices,
+            handCenter,
+            armRight,
+            armUp,
+            armForward,
+            new Vector3(settings.HandWidth, settings.HandHeight, settings.HandLength),
+            new Color(214, 176, 140),
+            new Color(188, 147, 114));
+
+        _graphicsDevice.DepthStencilState = DepthStencilState.None;
+        _graphicsDevice.RasterizerState = _rasterizerState;
+        _graphicsDevice.BlendState = BlendState.AlphaBlend;
+
+        _viewModelColorEffect.World = Matrix.Identity;
+        _viewModelColorEffect.View = view;
+        _viewModelColorEffect.Projection = projection;
+
+        foreach (EffectPass pass in _viewModelColorEffect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+            _graphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                armVertices.ToArray(),
+                0,
+                armVertices.Count,
+                armIndices.ToArray(),
+                0,
+                armIndices.Count / 3,
+                VoxelVertex.VertexDeclaration);
+        }
+
+        List<VoxelVertex> itemVertices = new();
+        List<int> itemIndices = new();
+        Vector3 itemRight = armRight;
+        Vector3 itemUp = armUp;
+        Vector3 itemForward = armForward;
+        Vector3 itemCenter =
+            handCenter +
+            itemRight * settings.ItemSideOffset +
+            itemUp * settings.ItemUpOffset +
+            itemForward * settings.ItemForwardOffset;
+
+        if (isTool)
+        {
+            Vector3 toolDirection =
+                itemForward * settings.ToolForwardFactor +
+                itemRight * settings.ToolRightFactor +
+                itemUp * settings.ToolUpFactor;
+
+            Vector3 toolForward = Vector3.Normalize(toolDirection);
+            Vector3 toolRight = Vector3.Normalize(Vector3.Cross(itemUp, toolForward));
+            if (toolRight.LengthSquared() < 0.001f)
+            {
+                toolRight = itemRight;
+            }
+
+            Vector3 toolUp = Vector3.Normalize(Vector3.Cross(toolForward, toolRight));
+            Vector3 toolCenter =
+                itemCenter +
+                toolRight * settings.ToolSideOffset +
+                toolUp * settings.ToolUpOffset +
+                toolForward * settings.ToolForwardOffset;
+            toolCenter +=
+                toolRight * settings.ToolGripRightOffset +
+                toolUp * settings.ToolGripUpOffset;
+
+            if (swordSlash)
+            {
+                toolCenter +=
+                    toolRight * settings.SwordSlashSideOffset +
+                    toolUp * settings.SwordSlashUpOffset +
+                    toolForward * settings.SwordSlashForwardOffset;
+            }
+
+            AddTexturedQuad(
+                itemVertices,
+                itemIndices,
+                toolCenter,
+                toolRight,
+                -toolUp,
+                settings.ToolWidth,
+                settings.ToolHeight,
+                Color.White);
+        }
+        else
+        {
+            Vector3 blockForward = Vector3.Normalize(
+                itemForward * settings.BlockForwardFactor +
+                itemRight * settings.BlockRightFactor +
+                itemUp * settings.BlockUpFactor);
+            Vector3 blockRight = Vector3.Normalize(Vector3.Cross(itemUp, blockForward));
+            if (blockRight.LengthSquared() < 0.001f)
+            {
+                blockRight = itemRight;
+            }
+
+            Vector3 blockUp = Vector3.Normalize(Vector3.Cross(blockForward, blockRight));
+            Vector3 blockCenter =
+                itemCenter +
+                blockRight * settings.BlockSideOffset +
+                blockUp * settings.BlockUpOffset +
+                blockForward * settings.BlockForwardOffset;
+            AddTexturedCube(
+                itemVertices,
+                itemIndices,
+                blockCenter,
+                blockRight,
+                blockUp,
+                blockForward,
+                settings.BlockSize,
+                Color.White);
+        }
+
+        _viewModelTextureEffect.World = Matrix.Identity;
+        _viewModelTextureEffect.View = view;
+        _viewModelTextureEffect.Projection = projection;
+        _viewModelTextureEffect.Texture = texture;
+
+        foreach (EffectPass pass in _viewModelTextureEffect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+            _graphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                itemVertices.ToArray(),
+                0,
+                itemVertices.Count,
+                itemIndices.ToArray(),
+                0,
+                itemIndices.Count / 3,
+                VoxelVertex.VertexDeclaration);
+        }
     }
 
     public void Dispose()
@@ -178,29 +424,38 @@ public sealed class VoxelWorldRenderer : IDisposable
 
         _chunkMeshes.Clear();
         _pendingBuilds.Clear();
+        _cloudRenderData?.Dispose();
         _blockTextureAtlas.Texture.Dispose();
+        _cloudEffect.Dispose();
         _unlitEffect.Dispose();
+        _viewModelColorEffect.Dispose();
+        _viewModelTextureEffect.Dispose();
         _effect.Dispose();
         _rasterizerState.Dispose();
     }
 
     private ChunkRenderData CreateChunkRenderData(WorldMeshData mesh)
     {
-        VertexBuffer vertexBuffer = new(_graphicsDevice, VoxelVertex.VertexDeclaration, mesh.Vertices.Length, BufferUsage.WriteOnly);
-        vertexBuffer.SetData(mesh.Vertices);
+        return CreateChunkRenderData(mesh.Vertices, mesh.Indices);
+    }
 
-        IndexBuffer indexBuffer = new(_graphicsDevice, IndexElementSize.ThirtyTwoBits, mesh.Indices.Length, BufferUsage.WriteOnly);
-        indexBuffer.SetData(mesh.Indices);
+    private ChunkRenderData CreateChunkRenderData(VoxelVertex[] vertices, int[] indices)
+    {
+        VertexBuffer vertexBuffer = new(_graphicsDevice, VoxelVertex.VertexDeclaration, vertices.Length, BufferUsage.WriteOnly);
+        vertexBuffer.SetData(vertices);
+
+        IndexBuffer indexBuffer = new(_graphicsDevice, IndexElementSize.ThirtyTwoBits, indices.Length, BufferUsage.WriteOnly);
+        indexBuffer.SetData(indices);
 
         return new ChunkRenderData
         {
             VertexBuffer = vertexBuffer,
             IndexBuffer = indexBuffer,
-            PrimitiveCount = mesh.Indices.Length / 3
+            PrimitiveCount = indices.Length / 3
         };
     }
 
-    private void DrawCloudLayer(Vector3 cameraPosition, float time)
+    private void DrawCloudLayer(Vector3 cameraPosition, float time, Matrix view, Matrix projection)
     {
         const float cloudHeight = 90f;
         const float cloudThickness = 2.25f;
@@ -208,12 +463,64 @@ public sealed class VoxelWorldRenderer : IDisposable
         const float cloudSpacing = 64f;
         const int cloudRadius = 4;
 
-        List<VoxelVertex> vertices = new();
-        List<short> indices = new();
-
         int centerCellX = (int)MathF.Floor(cameraPosition.X / cloudSpacing);
         int centerCellZ = (int)MathF.Floor(cameraPosition.Z / cloudSpacing);
         float drift = time * 2.4f;
+
+        EnsureCloudMesh(centerCellX, centerCellZ, cloudHeight, cloudThickness, cloudBlockSize, cloudSpacing, cloudRadius);
+        if (_cloudRenderData is null)
+        {
+            return;
+        }
+
+        _graphicsDevice.DepthStencilState = DepthStencilState.Default;
+        _graphicsDevice.RasterizerState = _rasterizerState;
+        _graphicsDevice.BlendState = BlendState.AlphaBlend;
+        _cloudEffect.World = Matrix.CreateTranslation(drift, 0f, 0f);
+        _cloudEffect.View = view;
+        _cloudEffect.Projection = projection;
+
+        foreach (EffectPass cloudPass in _cloudEffect.CurrentTechnique.Passes)
+        {
+            cloudPass.Apply();
+            _graphicsDevice.SetVertexBuffer(_cloudRenderData.VertexBuffer);
+            _graphicsDevice.Indices = _cloudRenderData.IndexBuffer;
+            _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, _cloudRenderData.PrimitiveCount);
+        }
+    }
+
+    private void EnsureCloudMesh(
+        int centerCellX,
+        int centerCellZ,
+        float cloudHeight,
+        float cloudThickness,
+        float cloudBlockSize,
+        float cloudSpacing,
+        int cloudRadius)
+    {
+        Point cell = new(centerCellX, centerCellZ);
+        if (_cloudMeshValid && cell == _cloudMeshCenterCell)
+        {
+            return;
+        }
+
+        _cloudRenderData?.Dispose();
+        _cloudRenderData = BuildCloudMesh(centerCellX, centerCellZ, cloudHeight, cloudThickness, cloudBlockSize, cloudSpacing, cloudRadius);
+        _cloudMeshCenterCell = cell;
+        _cloudMeshValid = _cloudRenderData is not null;
+    }
+
+    private ChunkRenderData? BuildCloudMesh(
+        int centerCellX,
+        int centerCellZ,
+        float cloudHeight,
+        float cloudThickness,
+        float cloudBlockSize,
+        float cloudSpacing,
+        int cloudRadius)
+    {
+        List<VoxelVertex> vertices = new();
+        List<int> indices = new();
 
         for (int cellZ = centerCellZ - cloudRadius; cellZ <= centerCellZ + cloudRadius; cellZ++)
         {
@@ -225,7 +532,7 @@ public sealed class VoxelWorldRenderer : IDisposable
                     continue;
                 }
 
-                float anchorX = cellX * cloudSpacing + ((hash >> 4) % 24) - 12f + drift;
+                float anchorX = cellX * cloudSpacing + ((hash >> 4) % 24) - 12f;
                 float anchorZ = cellZ * cloudSpacing + ((hash >> 8) % 24) - 12f;
                 AddCloudShape(
                     vertices,
@@ -241,18 +548,10 @@ public sealed class VoxelWorldRenderer : IDisposable
 
         if (vertices.Count == 0 || indices.Count == 0)
         {
-            return;
+            return null;
         }
 
-        _graphicsDevice.DrawUserIndexedPrimitives(
-            PrimitiveType.TriangleList,
-            vertices.ToArray(),
-            0,
-            vertices.Count,
-            indices.ToArray(),
-            0,
-            indices.Count / 3,
-            VoxelVertex.VertexDeclaration);
+        return CreateChunkRenderData(vertices.ToArray(), indices.ToArray());
     }
 
     private void DrawSun(Vector3 cameraPosition, Matrix view, Matrix projection)
@@ -273,7 +572,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         Vector2 halfSize = new(SunColumns * sunBlockSize * 0.5f, (SunPattern.Length / SunColumns) * sunBlockSize * 0.5f);
 
         List<VoxelVertex> vertices = new();
-        List<short> indices = new();
+        List<int> indices = new();
 
         for (int i = 0; i < SunPattern.Length; i++)
         {
@@ -317,7 +616,7 @@ public sealed class VoxelWorldRenderer : IDisposable
 
     private static void AddCloudShape(
         List<VoxelVertex> vertices,
-        List<short> indices,
+        List<int> indices,
         Vector3 anchor,
         int cellX,
         int cellZ,
@@ -368,7 +667,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         }
     }
 
-    private static void AddBox(List<VoxelVertex> vertices, List<short> indices, Vector3 min, Vector3 max)
+    private static void AddBox(List<VoxelVertex> vertices, List<int> indices, Vector3 min, Vector3 max)
     {
         Color top = new(251, 253, 255);
         Color side = new(235, 242, 252);
@@ -414,7 +713,7 @@ public sealed class VoxelWorldRenderer : IDisposable
 
     private static void AddOrientedBox(
         List<VoxelVertex> vertices,
-        List<short> indices,
+        List<int> indices,
         Vector3 center,
         Vector3 right,
         Vector3 up,
@@ -448,9 +747,112 @@ public sealed class VoxelWorldRenderer : IDisposable
         AddFace(vertices, indices, -up, edge, uv, lbf, rbf, rbb, lbb);
     }
 
+    private static void AddOrientedBox(
+        List<VoxelVertex> vertices,
+        List<int> indices,
+        Vector3 center,
+        Vector3 right,
+        Vector3 up,
+        Vector3 forward,
+        Vector3 size,
+        Color frontColor,
+        Color sideColor)
+    {
+        Vector3 halfRight = right * (size.X * 0.5f);
+        Vector3 halfUp = up * (size.Y * 0.5f);
+        Vector3 halfForward = forward * (size.Z * 0.5f);
+
+        Vector3 lbf = center - halfRight - halfUp - halfForward;
+        Vector3 rbf = center + halfRight - halfUp - halfForward;
+        Vector3 rtf = center + halfRight + halfUp - halfForward;
+        Vector3 ltf = center - halfRight + halfUp - halfForward;
+        Vector3 lbb = center - halfRight - halfUp + halfForward;
+        Vector3 rbb = center + halfRight - halfUp + halfForward;
+        Vector3 rtb = center + halfRight + halfUp + halfForward;
+        Vector3 ltb = center - halfRight + halfUp + halfForward;
+
+        Color highlight = ScaleColor(frontColor, 1.06f);
+        Color shadow = ScaleColor(sideColor, 0.92f);
+        Vector2 uv = Vector2.Zero;
+
+        AddFace(vertices, indices, -forward, highlight, uv, ltf, rtf, rbf, lbf);
+        AddFace(vertices, indices, forward, shadow, uv, lbb, rbb, rtb, ltb);
+        AddFace(vertices, indices, -right, sideColor, uv, lbf, lbb, ltb, ltf);
+        AddFace(vertices, indices, right, sideColor, uv, rbb, rbf, rtf, rtb);
+        AddFace(vertices, indices, up, highlight, uv, ltb, rtb, rtf, ltf);
+        AddFace(vertices, indices, -up, shadow, uv, lbf, rbf, rbb, lbb);
+    }
+
+    private static void AddTexturedCube(
+        List<VoxelVertex> vertices,
+        List<int> indices,
+        Vector3 center,
+        Vector3 right,
+        Vector3 up,
+        Vector3 forward,
+        float size,
+        Color color)
+    {
+        Vector3 halfRight = right * (size * 0.5f);
+        Vector3 halfUp = up * (size * 0.5f);
+        Vector3 halfForward = forward * (size * 0.5f);
+        Vector2[] quadUvs =
+        [
+            new Vector2(0f, 1f),
+            new Vector2(1f, 1f),
+            new Vector2(1f, 0f),
+            new Vector2(0f, 0f)
+        ];
+
+        Vector3 lbf = center - halfRight - halfUp - halfForward;
+        Vector3 rbf = center + halfRight - halfUp - halfForward;
+        Vector3 rtf = center + halfRight + halfUp - halfForward;
+        Vector3 ltf = center - halfRight + halfUp - halfForward;
+        Vector3 lbb = center - halfRight - halfUp + halfForward;
+        Vector3 rbb = center + halfRight - halfUp + halfForward;
+        Vector3 rtb = center + halfRight + halfUp + halfForward;
+        Vector3 ltb = center - halfRight + halfUp + halfForward;
+
+        AddTexturedFace(vertices, indices, -forward, color, quadUvs, ltf, rtf, rbf, lbf);
+        AddTexturedFace(vertices, indices, forward, ScaleColor(color, 0.86f), quadUvs, lbb, rbb, rtb, ltb);
+        AddTexturedFace(vertices, indices, -right, ScaleColor(color, 0.92f), quadUvs, lbf, lbb, ltb, ltf);
+        AddTexturedFace(vertices, indices, right, ScaleColor(color, 0.92f), quadUvs, rbb, rbf, rtf, rtb);
+        AddTexturedFace(vertices, indices, up, ScaleColor(color, 1.08f), quadUvs, ltb, rtb, rtf, ltf);
+        AddTexturedFace(vertices, indices, -up, ScaleColor(color, 0.78f), quadUvs, lbf, rbf, rbb, lbb);
+    }
+
+    private static void AddTexturedQuad(
+        List<VoxelVertex> vertices,
+        List<int> indices,
+        Vector3 center,
+        Vector3 right,
+        Vector3 up,
+        float width,
+        float height,
+        Color color)
+    {
+        Vector3 halfRight = right * (width * 0.5f);
+        Vector3 halfUp = up * (height * 0.5f);
+        Vector2[] quadUvs =
+        [
+            new Vector2(0f, 1f),
+            new Vector2(1f, 1f),
+            new Vector2(1f, 0f),
+            new Vector2(0f, 0f)
+        ];
+
+        Vector3 a = center - halfRight + halfUp;
+        Vector3 b = center + halfRight + halfUp;
+        Vector3 c = center + halfRight - halfUp;
+        Vector3 d = center - halfRight - halfUp;
+        Vector3 normal = Vector3.Normalize(Vector3.Cross(b - a, c - a));
+
+        AddTexturedFace(vertices, indices, normal, color, quadUvs, a, b, c, d);
+    }
+
     private static void AddFace(
         List<VoxelVertex> vertices,
-        List<short> indices,
+        List<int> indices,
         Vector3 normal,
         Color color,
         Vector2 uv,
@@ -459,18 +861,52 @@ public sealed class VoxelWorldRenderer : IDisposable
         Vector3 c,
         Vector3 d)
     {
-        short start = (short)vertices.Count;
+        int start = vertices.Count;
         vertices.Add(new VoxelVertex(a, normal, color, uv));
         vertices.Add(new VoxelVertex(b, normal, color, uv));
         vertices.Add(new VoxelVertex(c, normal, color, uv));
         vertices.Add(new VoxelVertex(d, normal, color, uv));
 
         indices.Add(start);
-        indices.Add((short)(start + 1));
-        indices.Add((short)(start + 2));
+        indices.Add(start + 1);
+        indices.Add(start + 2);
         indices.Add(start);
-        indices.Add((short)(start + 2));
-        indices.Add((short)(start + 3));
+        indices.Add(start + 2);
+        indices.Add(start + 3);
+    }
+
+    private static void AddTexturedFace(
+        List<VoxelVertex> vertices,
+        List<int> indices,
+        Vector3 normal,
+        Color color,
+        Vector2[] uvs,
+        Vector3 a,
+        Vector3 b,
+        Vector3 c,
+        Vector3 d)
+    {
+        int start = vertices.Count;
+        vertices.Add(new VoxelVertex(a, normal, color, uvs[0]));
+        vertices.Add(new VoxelVertex(b, normal, color, uvs[1]));
+        vertices.Add(new VoxelVertex(c, normal, color, uvs[2]));
+        vertices.Add(new VoxelVertex(d, normal, color, uvs[3]));
+
+        indices.Add(start);
+        indices.Add(start + 1);
+        indices.Add(start + 2);
+        indices.Add(start);
+        indices.Add(start + 2);
+        indices.Add(start + 3);
+    }
+
+    private static Color ScaleColor(Color color, float scale)
+    {
+        return new Color(
+            (byte)Math.Clamp((int)(color.R * scale), 0, 255),
+            (byte)Math.Clamp((int)(color.G * scale), 0, 255),
+            (byte)Math.Clamp((int)(color.B * scale), 0, 255),
+            color.A);
     }
 
     private static int Hash(int x, int z, int seed)

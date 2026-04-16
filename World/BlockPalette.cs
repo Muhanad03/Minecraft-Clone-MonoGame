@@ -27,7 +27,7 @@ public static class BlockPalette
             BlockType.Grass when face == FaceDirection.Bottom => BlockTextureId.Dirt,
             BlockType.Grass => BlockTextureId.GrassSide,
             BlockType.Dirt => BlockTextureId.Dirt,
-            BlockType.Stone => BlockTextureId.Dirt,
+            BlockType.Stone => BlockTextureId.Stone,
             BlockType.Trunk when face == FaceDirection.Top || face == FaceDirection.Bottom => BlockTextureId.LogTop,
             BlockType.Trunk => BlockTextureId.LogSide,
             BlockType.Leaves => BlockTextureId.Leaves,

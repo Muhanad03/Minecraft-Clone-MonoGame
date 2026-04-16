@@ -16,6 +16,7 @@ public sealed class PlayerController
     private const float Height = 1.8f;
     private const float EyeOffset = 1.62f;
     private const float StepHeight = 1.05f;
+    private const float StepSmoothSpeed = 10f;
 
     private Vector3 _position;
     private float _verticalVelocity;
@@ -23,13 +24,14 @@ public sealed class PlayerController
     private float _pitch = -0.22f;
     private bool _isGrounded;
     private bool _mouseLookReady;
+    private float _stepVisualOffset;
 
     public PlayerController(Vector3 spawnPosition)
     {
         _position = spawnPosition;
     }
 
-    public Vector3 CameraPosition => _position + new Vector3(0f, EyeOffset, 0f);
+    public Vector3 CameraPosition => _position + new Vector3(0f, EyeOffset - _stepVisualOffset, 0f);
 
     public BoundingBox Bounds => new(
         new Vector3(_position.X - HalfWidth, _position.Y, _position.Z - HalfWidth),
@@ -67,6 +69,7 @@ public sealed class PlayerController
         _verticalVelocity = MathHelper.Max(_verticalVelocity, -36f);
 
         MoveWithCollision(new Vector3(horizontalMove.X, _verticalVelocity * dt, horizontalMove.Z), world);
+        UpdateStepSmoothing(dt);
 
         if (IsColliding(_position + new Vector3(0f, -0.08f, 0f), world))
         {
@@ -178,10 +181,11 @@ public sealed class PlayerController
 
         if (_isGrounded)
         {
-            Vector3 stepped = _position + delta + new Vector3(0f, StepHeight, 0f);
-            if (!IsColliding(stepped, world))
+            if (TryStepUp(delta, world, out Vector3 stepped))
             {
+                float stepRise = stepped.Y - _position.Y;
                 _position = stepped;
+                _stepVisualOffset = Math.Max(_stepVisualOffset, stepRise);
                 return;
             }
         }
@@ -207,6 +211,46 @@ public sealed class PlayerController
         {
             _isGrounded = true;
         }
+    }
+
+    private void UpdateStepSmoothing(float dt)
+    {
+        if (_stepVisualOffset <= 0f)
+        {
+            _stepVisualOffset = 0f;
+            return;
+        }
+
+        _stepVisualOffset = Math.Max(0f, _stepVisualOffset - StepSmoothSpeed * dt);
+    }
+
+    private bool TryStepUp(Vector3 horizontalDelta, IBlockWorld world, out Vector3 steppedPosition)
+    {
+        Vector3 movedHorizontally = _position + horizontalDelta;
+        const int stepChecks = 6;
+
+        for (int i = 1; i <= stepChecks; i++)
+        {
+            float stepOffset = StepHeight * (i / (float)stepChecks);
+            Vector3 candidate = movedHorizontally + new Vector3(0f, stepOffset, 0f);
+
+            if (IsColliding(candidate, world))
+            {
+                continue;
+            }
+
+            // Only step when there is actual floor support just below the new feet position.
+            if (!IsColliding(candidate + new Vector3(0f, -0.08f, 0f), world))
+            {
+                continue;
+            }
+
+            steppedPosition = candidate;
+            return true;
+        }
+
+        steppedPosition = default;
+        return false;
     }
 
     private bool IsColliding(Vector3 position, IBlockWorld world)

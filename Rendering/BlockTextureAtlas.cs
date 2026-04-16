@@ -10,6 +10,7 @@ public enum BlockTextureId
     GrassTop,
     GrassSide,
     Dirt,
+    Stone,
     LogSide,
     LogTop,
     Leaves
@@ -26,6 +27,7 @@ public sealed class BlockTextureAtlas
             (BlockTextureId.GrassTop, "Textures/blocks/grass_top"),
             (BlockTextureId.GrassSide, "Textures/blocks/grass_side"),
             (BlockTextureId.Dirt, "Textures/blocks/dirt"),
+            (BlockTextureId.Stone, "Textures/blocks/stone"),
             (BlockTextureId.LogSide, "Textures/blocks/log_oak"),
             (BlockTextureId.LogTop, "Textures/blocks/log_oak_top"),
             (BlockTextureId.Leaves, "Textures/blocks/leaves_oak_opaque")
@@ -38,7 +40,7 @@ public sealed class BlockTextureAtlas
         }
 
         int tileSize = textures[0].Width;
-        int columns = 3;
+        int columns = 4;
         int rows = 2;
         Texture = new Texture2D(graphicsDevice, columns * tileSize, rows * tileSize);
 
