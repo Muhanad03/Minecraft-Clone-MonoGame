@@ -7,6 +7,10 @@ namespace NewProject.World;
 
 public static class WorldMeshBuilder
 {
+    private static readonly Vector3 ShadowSunDirection = Vector3.Normalize(new Vector3(0.42f, 1.1f, 0.26f));
+    private const float ShadowStepLength = 0.9f;
+    private const float ShadowMaxDistance = 16f;
+
     public static BlockTextureAtlas TextureAtlas { get; set; }
 
     public static WorldMeshData BuildChunk(InfiniteWorld world, WorldChunk chunk)
@@ -35,7 +39,7 @@ public static class WorldMeshBuilder
                     int globalZ = worldOffsetZ + z;
                     float waterTop = block == BlockType.Water ? y + 0.88f : y + 1f;
 
-                    if (ShouldRenderFace(world, block, globalX, y + 1, globalZ))
+                    if (ShouldRenderFace(world, block, FaceDirection.Top, globalX, y + 1, globalZ))
                     {
                         AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Top, Vector3.Up,
                             new Vector3(globalX, waterTop, globalZ),
@@ -44,7 +48,7 @@ public static class WorldMeshBuilder
                             new Vector3(globalX, waterTop, globalZ + 1));
                     }
 
-                    if (ShouldRenderFace(world, block, globalX, y - 1, globalZ))
+                    if (ShouldRenderFace(world, block, FaceDirection.Bottom, globalX, y - 1, globalZ))
                     {
                         AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Bottom, Vector3.Down,
                             new Vector3(globalX, y, globalZ + 1),
@@ -53,7 +57,7 @@ public static class WorldMeshBuilder
                             new Vector3(globalX, y, globalZ));
                     }
 
-                    if (ShouldRenderFace(world, block, globalX - 1, y, globalZ))
+                    if (ShouldRenderFace(world, block, FaceDirection.Left, globalX - 1, y, globalZ))
                     {
                         AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Left, Vector3.Left,
                             new Vector3(globalX, y, globalZ),
@@ -62,7 +66,7 @@ public static class WorldMeshBuilder
                             new Vector3(globalX, waterTop, globalZ));
                     }
 
-                    if (ShouldRenderFace(world, block, globalX + 1, y, globalZ))
+                    if (ShouldRenderFace(world, block, FaceDirection.Right, globalX + 1, y, globalZ))
                     {
                         AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Right, Vector3.Right,
                             new Vector3(globalX + 1, y, globalZ + 1),
@@ -71,7 +75,7 @@ public static class WorldMeshBuilder
                             new Vector3(globalX + 1, waterTop, globalZ + 1));
                     }
 
-                    if (ShouldRenderFace(world, block, globalX, y, globalZ - 1))
+                    if (ShouldRenderFace(world, block, FaceDirection.Back, globalX, y, globalZ - 1))
                     {
                         AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Back, Vector3.Backward,
                             new Vector3(globalX + 1, y, globalZ),
@@ -80,7 +84,7 @@ public static class WorldMeshBuilder
                             new Vector3(globalX + 1, waterTop, globalZ));
                     }
 
-                    if (ShouldRenderFace(world, block, globalX, y, globalZ + 1))
+                    if (ShouldRenderFace(world, block, FaceDirection.Front, globalX, y, globalZ + 1))
                     {
                         AddFace(world, solidVertices, solidIndices, waterVertices, waterIndices, block, FaceDirection.Front, Vector3.Forward,
                             new Vector3(globalX, y, globalZ + 1),
@@ -180,7 +184,10 @@ public static class WorldMeshBuilder
 
         int occlusion = (side1 && side2) ? 0 : 3 - (BoolToInt(side1) + BoolToInt(side2) + BoolToInt(corner));
         float aoFactor = 0.94f + (occlusion / 3f) * 0.06f;
-        return ScaleColor(baseColor, aoFactor * faceShadow);
+        float sunFacing = MathF.Max(0f, Vector3.Dot(normal, ShadowSunDirection));
+        float sunVisibility = sunFacing > 0.02f ? SampleSunVisibility(world, vertex + normal * 0.55f) : 1f;
+        float shadowFactor = MathHelper.Lerp(1f, sunVisibility, sunFacing);
+        return ScaleColor(baseColor, aoFactor * faceShadow * shadowFactor);
     }
 
     private static bool IsSolidAtSample(InfiniteWorld world, Vector3 sample)
@@ -189,6 +196,27 @@ public static class WorldMeshBuilder
         int y = (int)MathF.Floor(sample.Y);
         int z = (int)MathF.Floor(sample.Z);
         return world.IsSolid(x, y, z);
+    }
+
+    private static float SampleSunVisibility(InfiniteWorld world, Vector3 sample)
+    {
+        for (float distance = ShadowStepLength; distance <= ShadowMaxDistance; distance += ShadowStepLength)
+        {
+            Vector3 tracePoint = sample + ShadowSunDirection * distance;
+            int x = (int)MathF.Floor(tracePoint.X);
+            int y = (int)MathF.Floor(tracePoint.Y);
+            int z = (int)MathF.Floor(tracePoint.Z);
+
+            if (!world.IsSolidLoadedOrAir(x, y, z))
+            {
+                continue;
+            }
+
+            float distanceFactor = 1f - MathHelper.Clamp(distance / ShadowMaxDistance, 0f, 1f);
+            return MathHelper.Lerp(0.82f, 0.58f, distanceFactor);
+        }
+
+        return 1f;
     }
 
     private static int BoolToInt(bool value) => value ? 1 : 0;
@@ -202,7 +230,7 @@ public static class WorldMeshBuilder
             color.A);
     }
 
-    private static bool ShouldRenderFace(InfiniteWorld world, BlockType block, int neighborX, int neighborY, int neighborZ)
+    private static bool ShouldRenderFace(InfiniteWorld world, BlockType block, FaceDirection faceDirection, int neighborX, int neighborY, int neighborZ)
     {
         BlockType neighbor = world.GetBlock(neighborX, neighborY, neighborZ);
         if (neighbor == block)
@@ -212,6 +240,11 @@ public static class WorldMeshBuilder
 
         if (block == BlockType.Water)
         {
+            if (faceDirection == FaceDirection.Bottom && BlockPalette.IsSolid(neighbor))
+            {
+                return false;
+            }
+
             return neighbor != BlockType.Water;
         }
 

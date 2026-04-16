@@ -33,6 +33,8 @@ public sealed class PlayerController
 
     public Vector3 CameraPosition => _position + new Vector3(0f, EyeOffset - _stepVisualOffset, 0f);
 
+    public Vector3 Position => _position;
+
     public BoundingBox Bounds => new(
         new Vector3(_position.X - HalfWidth, _position.Y, _position.Z - HalfWidth),
         new Vector3(_position.X + HalfWidth, _position.Y + Height, _position.Z + HalfWidth));
@@ -42,6 +44,14 @@ public sealed class PlayerController
     public Matrix GetProjectionMatrix(float aspectRatio)
     {
         return Matrix.CreatePerspectiveFieldOfView(MathHelper.PiOver4, aspectRatio, 0.1f, 260f);
+    }
+
+    public void Teleport(Vector3 position)
+    {
+        _position = position;
+        _verticalVelocity = 0f;
+        _isGrounded = false;
+        _stepVisualOffset = 0f;
     }
 
     public void Update(GameTime gameTime, GameWindow window, bool isActive, IBlockWorld world)

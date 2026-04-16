@@ -10,8 +10,7 @@ namespace NewProject.Rendering;
 
 public sealed class VoxelWorldRenderer : IDisposable
 {
-    public static readonly Color SkyColor = new(130, 190, 255);
-    public static readonly Vector3 LightDirection = Vector3.Normalize(new Vector3(-0.45f, -0.9f, 0.22f));
+    private const float SunMovementSpeed = 0.035f;
     private static readonly int[] SunPattern =
     [
         0,0,1,1,1,1,1,1,0,0,
@@ -42,6 +41,30 @@ public sealed class VoxelWorldRenderer : IDisposable
     private bool _cloudMeshValid;
 
     public ViewModelSettings ViewModelSettings { get; } = new();
+
+    public static Vector3 GetSunDirection(float time)
+    {
+        float angle = time * SunMovementSpeed;
+        float horizonX = MathF.Cos(angle);
+        float horizonZ = MathF.Sin(angle * 0.82f);
+        float height = MathF.Sin(angle);
+        return Vector3.Normalize(new Vector3(horizonX, height * 1.25f, horizonZ));
+    }
+
+    public static Color GetSkyColor(float time)
+    {
+        Vector3 sunDirection = GetSunDirection(time);
+        float daylight = MathHelper.Clamp((sunDirection.Y + 0.10f) / 0.32f, 0f, 1f);
+        daylight = daylight * daylight * (3f - 2f * daylight);
+        Vector3 horizon = Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.90f, 0.95f, 1.00f), daylight);
+        Vector3 zenith = Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.42f, 0.72f, 1.00f), daylight);
+        Vector3 sky = Vector3.Lerp(horizon, zenith, 0.58f) * MathHelper.Lerp(0.20f, 1.34f, daylight);
+        return new Color(Vector3.Clamp(sky, Vector3.Zero, Vector3.One));
+    }
+
+    public static float GetDayTimeValue() => MathHelper.PiOver2 / SunMovementSpeed;
+
+    public static float GetNightTimeValue() => (MathHelper.PiOver2 * 3f) / SunMovementSpeed;
 
     public VoxelWorldRenderer(GraphicsDevice graphicsDevice, ContentManager content)
     {
@@ -160,8 +183,12 @@ public sealed class VoxelWorldRenderer : IDisposable
         }
     }
 
-    public void Draw(Vector3 cameraPosition, Matrix view, Matrix projection, float time)
+    public void Draw(Vector3 cameraPosition, Matrix view, Matrix projection, float time, float underwaterFactor)
     {
+        Vector3 sunDirection = GetSunDirection(time);
+        float daylight = MathHelper.Clamp((sunDirection.Y + 0.10f) / 0.32f, 0f, 1f);
+        daylight = daylight * daylight * (3f - 2f * daylight);
+
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _rasterizerState;
         _graphicsDevice.BlendState = BlendState.Opaque;
@@ -171,15 +198,17 @@ public sealed class VoxelWorldRenderer : IDisposable
         _effect.Parameters["CameraPosition"]?.SetValue(cameraPosition);
         _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
         _effect.Parameters["Time"]?.SetValue(time);
-        _effect.Parameters["SunDirection"]?.SetValue(LightDirection);
-        _effect.Parameters["AmbientColor"]?.SetValue(new Vector3(0.92f, 0.96f, 1.0f));
-        _effect.Parameters["SunColor"]?.SetValue(new Vector3(1.05f, 1.0f, 0.94f));
-        _effect.Parameters["HorizonColor"]?.SetValue(new Vector3(0.62f, 0.79f, 0.98f));
-        _effect.Parameters["ZenithColor"]?.SetValue(new Vector3(0.19f, 0.43f, 0.85f));
-        _effect.Parameters["FogColor"]?.SetValue(new Vector3(0.71f, 0.84f, 0.98f));
+        _effect.Parameters["SunDirection"]?.SetValue(sunDirection);
+        _effect.Parameters["AmbientColor"]?.SetValue(Vector3.Lerp(new Vector3(0.06f, 0.07f, 0.10f), new Vector3(1.10f, 1.16f, 1.22f), daylight));
+        _effect.Parameters["SunColor"]?.SetValue(Vector3.Lerp(new Vector3(0.03f, 0.04f, 0.08f), new Vector3(1.55f, 1.38f, 1.10f), daylight));
+        _effect.Parameters["HorizonColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.90f, 0.95f, 1.00f), daylight));
+        _effect.Parameters["ZenithColor"]?.SetValue(Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.42f, 0.72f, 1.00f), daylight));
+        _effect.Parameters["FogColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.92f, 0.97f, 1.00f), daylight));
+        _effect.Parameters["UnderwaterFogColor"]?.SetValue(new Vector3(0.12f, 0.28f, 0.42f));
         _effect.Parameters["ShadowColor"]?.SetValue(new Vector3(1.0f, 1.0f, 1.0f));
         _effect.Parameters["FogStart"]?.SetValue(24f);
         _effect.Parameters["FogEnd"]?.SetValue(120f);
+        _effect.Parameters["UnderwaterFactor"]?.SetValue(underwaterFactor);
 
         foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
         {
@@ -193,10 +222,11 @@ public sealed class VoxelWorldRenderer : IDisposable
             }
         }
 
-        DrawWater(view, projection, cameraPosition, time);
+        DrawWater(view, projection, cameraPosition, time, sunDirection, daylight, underwaterFactor);
 
-        DrawCloudLayer(cameraPosition, time, view, projection);
-        DrawSun(cameraPosition, view, projection);
+        DrawStars(cameraPosition, view, projection, daylight);
+        DrawCloudLayer(cameraPosition, time, view, projection, daylight, sunDirection);
+        DrawSun(cameraPosition, view, projection, sunDirection);
     }
 
     public void DrawViewModel(
@@ -463,7 +493,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         };
     }
 
-    private void DrawWater(Matrix view, Matrix projection, Vector3 cameraPosition, float time)
+    private void DrawWater(Matrix view, Matrix projection, Vector3 cameraPosition, float time, Vector3 sunDirection, float daylight, float underwaterFactor)
     {
         _graphicsDevice.DepthStencilState = DepthStencilState.DepthRead;
         _graphicsDevice.RasterizerState = _rasterizerState;
@@ -475,6 +505,16 @@ public sealed class VoxelWorldRenderer : IDisposable
         _effect.Parameters["CameraPosition"]?.SetValue(cameraPosition);
         _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
         _effect.Parameters["Time"]?.SetValue(time);
+        _effect.Parameters["SunDirection"]?.SetValue(sunDirection);
+        _effect.Parameters["AmbientColor"]?.SetValue(Vector3.Lerp(new Vector3(0.06f, 0.07f, 0.10f), new Vector3(1.10f, 1.16f, 1.22f), daylight));
+        _effect.Parameters["SunColor"]?.SetValue(Vector3.Lerp(new Vector3(0.03f, 0.04f, 0.08f), new Vector3(1.55f, 1.38f, 1.10f), daylight));
+        _effect.Parameters["HorizonColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.90f, 0.95f, 1.00f), daylight));
+        _effect.Parameters["ZenithColor"]?.SetValue(Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.42f, 0.72f, 1.00f), daylight));
+        _effect.Parameters["FogColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.92f, 0.97f, 1.00f), daylight));
+        _effect.Parameters["UnderwaterFogColor"]?.SetValue(new Vector3(0.12f, 0.28f, 0.42f));
+        _effect.Parameters["FogStart"]?.SetValue(24f);
+        _effect.Parameters["FogEnd"]?.SetValue(120f);
+        _effect.Parameters["UnderwaterFactor"]?.SetValue(underwaterFactor);
 
         foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
         {
@@ -494,7 +534,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         }
     }
 
-    private void DrawCloudLayer(Vector3 cameraPosition, float time, Matrix view, Matrix projection)
+    private void DrawCloudLayer(Vector3 cameraPosition, float time, Matrix view, Matrix projection, float daylight, Vector3 sunDirection)
     {
         const float cloudHeight = 90f;
         const float cloudThickness = 2.25f;
@@ -518,6 +558,10 @@ public sealed class VoxelWorldRenderer : IDisposable
         _cloudEffect.World = Matrix.CreateTranslation(drift, 0f, 0f);
         _cloudEffect.View = view;
         _cloudEffect.Projection = projection;
+        float cloudLight = MathHelper.Lerp(0.28f, 1f, daylight);
+        float warmEdge = MathHelper.Clamp(sunDirection.Y * 0.5f + 0.5f, 0f, 1f);
+        _cloudEffect.DiffuseColor = Vector3.Lerp(new Vector3(0.30f, 0.34f, 0.44f), new Vector3(1.0f, 0.96f, 0.92f), cloudLight * (0.82f + warmEdge * 0.18f));
+        _cloudEffect.Alpha = MathHelper.Lerp(0.70f, 0.92f, daylight);
 
         foreach (EffectPass cloudPass in _cloudEffect.CurrentTechnique.Passes)
         {
@@ -525,6 +569,81 @@ public sealed class VoxelWorldRenderer : IDisposable
             _graphicsDevice.SetVertexBuffer(_cloudRenderData.VertexBuffer);
             _graphicsDevice.Indices = _cloudRenderData.IndexBuffer;
             _graphicsDevice.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, _cloudRenderData.PrimitiveCount);
+        }
+    }
+
+    private void DrawStars(Vector3 cameraPosition, Matrix view, Matrix projection, float daylight)
+    {
+        float starVisibility = 1f - daylight;
+        if (starVisibility <= 0.02f)
+        {
+            return;
+        }
+
+        Matrix cameraWorld = Matrix.Invert(view);
+        Vector3 cameraRight = Vector3.Normalize(cameraWorld.Right);
+        Vector3 cameraUp = Vector3.Normalize(cameraWorld.Up);
+        List<VoxelVertex> vertices = new();
+        List<int> indices = new();
+
+        const int starCount = 140;
+        const float starDistance = 210f;
+
+        for (int i = 0; i < starCount; i++)
+        {
+            int seed = Hash(i * 17, i * 31, 9001);
+            float u = ((seed & 1023) / 1023f);
+            float v = (((seed >> 10) & 1023) / 1023f);
+            float azimuth = u * MathHelper.TwoPi;
+            float elevation = MathHelper.Lerp(0.08f, 1.20f, v);
+            Vector3 direction = Vector3.Normalize(new Vector3(
+                MathF.Cos(azimuth) * MathF.Cos(elevation),
+                MathF.Sin(elevation),
+                MathF.Sin(azimuth) * MathF.Cos(elevation)));
+
+            if (direction.Y < 0.06f)
+            {
+                continue;
+            }
+
+            Vector3 center = cameraPosition + direction * starDistance;
+            float size = MathHelper.Lerp(0.35f, 0.95f, ((seed >> 20) & 255) / 255f);
+            float brightness = MathHelper.Lerp(0.55f, 1.0f, ((seed >> 6) & 255) / 255f) * starVisibility;
+            Color color = new(
+                (byte)(220 * brightness),
+                (byte)(230 * brightness),
+                (byte)(255 * brightness),
+                (byte)(255 * MathHelper.Lerp(0.45f, 0.95f, starVisibility)));
+
+            AddBillboardQuad(vertices, indices, center, cameraRight, cameraUp, size, color);
+        }
+
+        if (vertices.Count == 0)
+        {
+            return;
+        }
+
+        _graphicsDevice.DepthStencilState = DepthStencilState.None;
+        _graphicsDevice.RasterizerState = _rasterizerState;
+        _graphicsDevice.BlendState = BlendState.AlphaBlend;
+        _unlitEffect.World = Matrix.Identity;
+        _unlitEffect.View = view;
+        _unlitEffect.Projection = projection;
+        _unlitEffect.DiffuseColor = Vector3.One;
+        _unlitEffect.Alpha = MathHelper.Lerp(0.35f, 1f, starVisibility);
+
+        foreach (EffectPass pass in _unlitEffect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+            _graphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                vertices.ToArray(),
+                0,
+                vertices.Count,
+                indices.ToArray(),
+                0,
+                indices.Count / 3,
+                VoxelVertex.VertexDeclaration);
         }
     }
 
@@ -593,13 +712,18 @@ public sealed class VoxelWorldRenderer : IDisposable
         return CreateBufferData(vertices.ToArray(), indices.ToArray());
     }
 
-    private void DrawSun(Vector3 cameraPosition, Matrix view, Matrix projection)
+    private void DrawSun(Vector3 cameraPosition, Matrix view, Matrix projection, Vector3 sunDirection)
     {
         const float sunDistance = 220f;
         const float sunBlockSize = 4.5f;
         const float sunThickness = 0.8f;
 
-        Vector3 sunForward = Vector3.Normalize(-LightDirection);
+        if (sunDirection.Y <= -0.08f)
+        {
+            return;
+        }
+
+        Vector3 sunForward = Vector3.Normalize(-sunDirection);
         Vector3 sunRight = Vector3.Normalize(Vector3.Cross(Vector3.Up, sunForward));
         if (sunRight.LengthSquared() < 0.001f)
         {
@@ -637,6 +761,8 @@ public sealed class VoxelWorldRenderer : IDisposable
         _unlitEffect.World = Matrix.Identity;
         _unlitEffect.View = view;
         _unlitEffect.Projection = projection;
+        _unlitEffect.DiffuseColor = new Vector3(1.0f, 0.88f, 0.60f);
+        _unlitEffect.Alpha = 1f;
 
         foreach (EffectPass pass in _unlitEffect.CurrentTechnique.Passes)
         {
@@ -704,6 +830,32 @@ public sealed class VoxelWorldRenderer : IDisposable
                 AddBox(vertices, indices, min, max);
             }
         }
+    }
+
+    private static void AddBillboardQuad(
+        List<VoxelVertex> vertices,
+        List<int> indices,
+        Vector3 center,
+        Vector3 right,
+        Vector3 up,
+        float size,
+        Color color)
+    {
+        Vector3 halfRight = right * size * 0.5f;
+        Vector3 halfUp = up * size * 0.5f;
+        Vector2 uv = Vector2.Zero;
+        Vector3 normal = Vector3.Normalize(Vector3.Cross(right, up));
+
+        AddFace(
+            vertices,
+            indices,
+            normal,
+            color,
+            uv,
+            center - halfRight + halfUp,
+            center + halfRight + halfUp,
+            center + halfRight - halfUp,
+            center - halfRight - halfUp);
     }
 
     private static void AddBox(List<VoxelVertex> vertices, List<int> indices, Vector3 min, Vector3 max)

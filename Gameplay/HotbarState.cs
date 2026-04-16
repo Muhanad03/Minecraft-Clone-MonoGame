@@ -52,9 +52,14 @@ public sealed class HotbarState
 
     public void AddBlock(BlockType block)
     {
+        AddBlock(block, 1);
+    }
+
+    public void AddBlock(BlockType block, int amount)
+    {
         if (_inventory.ContainsKey(block))
         {
-            _inventory[block]++;
+            _inventory[block] += amount;
         }
     }
 

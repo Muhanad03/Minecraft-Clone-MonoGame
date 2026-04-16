@@ -24,6 +24,8 @@ public class Game1 : Game
     private HotbarState _hotbar = null!;
     private WorldInteractionController _interaction = null!;
     private GameHudRenderer _hud = null!;
+    private GameConsole _console = null!;
+    private GameConsoleRenderer _consoleRenderer = null!;
 
     private Point _lastChunk;
     private MouseState _previousMouse;
@@ -31,6 +33,7 @@ public class Game1 : Game
     private int _fps;
     private int _frameCounter;
     private double _fpsTimer;
+    private float _worldTime;
 
     public Game1()
     {
@@ -56,6 +59,8 @@ public class Game1 : Game
         Vector3 spawn = new(8f, _world.GetSurfaceHeight(8, 8) + 1.2f, 8f);
         _player = new PlayerController(spawn);
         _hotbar = new HotbarState();
+        _worldTime = VoxelWorldRenderer.GetDayTimeValue();
+        _console = new GameConsole(_hotbar, _player, _world, () => _worldTime, SetTimePreset);
         _lastChunk = _world.GetChunkCoordinate(_player.CameraPosition);
 
         base.Initialize();
@@ -69,19 +74,31 @@ public class Game1 : Game
 
         _interaction = new WorldInteractionController(_world, _player, _renderer, _hotbar);
         _hud = new GameHudRenderer(GraphicsDevice, Content);
+        _consoleRenderer = new GameConsoleRenderer(GraphicsDevice, Content);
     }
 
     protected override void Update(GameTime gameTime)
     {
         KeyboardState keyboard = Keyboard.GetState();
         MouseState mouse = Mouse.GetState();
+        _worldTime += (float)gameTime.ElapsedGameTime.TotalSeconds;
 
-        if (keyboard.IsKeyDown(Keys.Escape))
+        bool toggledConsole = _console.HandleToggle(keyboard, _previousKeyboard);
+        if (toggledConsole)
         {
-            Exit();
+            IsMouseVisible = _console.IsOpen;
+        }
+
+        if (_console.IsOpen)
+        {
+            _console.HandleInput(keyboard, _previousKeyboard, mouse, _previousMouse);
+            _previousMouse = mouse;
+            _previousKeyboard = keyboard;
+            base.Update(gameTime);
             return;
         }
 
+        
         _player.Update(gameTime, Window, IsActive, _world);
         _hotbar.HandleInput(keyboard, _previousKeyboard, mouse, _previousMouse);
         _interaction.HandleInput(mouse, _previousMouse);
@@ -100,9 +117,14 @@ public class Game1 : Game
         HotbarEntry selected = _hotbar.SelectedEntry;
         Texture2D heldTexture = _hud.GetHeldTexture(selected);
         Matrix projection = _player.GetProjectionMatrix(GraphicsDevice.Viewport.AspectRatio);
+        int cameraBlockX = (int)MathF.Floor(_player.CameraPosition.X);
+        int cameraBlockY = (int)MathF.Floor(_player.CameraPosition.Y);
+        int cameraBlockZ = (int)MathF.Floor(_player.CameraPosition.Z);
+        float underwaterFactor = _world.GetBlock(cameraBlockX, cameraBlockY, cameraBlockZ) == BlockType.Water ? 1f : 0f;
 
-        GraphicsDevice.Clear(VoxelWorldRenderer.SkyColor);
-        _renderer.Draw(_player.CameraPosition, _player.ViewMatrix, projection, (float)gameTime.TotalGameTime.TotalSeconds);
+        float time = _worldTime;
+        GraphicsDevice.Clear(VoxelWorldRenderer.GetSkyColor(time));
+        _renderer.Draw(_player.CameraPosition, _player.ViewMatrix, projection, time, underwaterFactor);
         _renderer.DrawViewModel(
             _player.CameraPosition,
             _player.ViewMatrix,
@@ -113,6 +135,7 @@ public class Game1 : Game
             _interaction.UseAnimationTimer,
             WorldInteractionController.UseAnimationDuration);
         _hud.Draw(GraphicsDevice, _hotbar, _fps);
+        _consoleRenderer.Draw(GraphicsDevice, _console);
 
         base.Draw(gameTime);
     }
@@ -151,5 +174,12 @@ public class Game1 : Game
         _fps = _frameCounter;
         _frameCounter = 0;
         _fpsTimer -= 1.0;
+    }
+
+    private void SetTimePreset(string preset)
+    {
+        _worldTime = preset == "night"
+            ? VoxelWorldRenderer.GetNightTimeValue()
+            : VoxelWorldRenderer.GetDayTimeValue();
     }
 }

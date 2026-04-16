@@ -18,10 +18,12 @@ float3 SunColor;
 float3 HorizonColor;
 float3 ZenithColor;
 float3 FogColor;
+float3 UnderwaterFogColor;
 float3 ShadowColor;
 float FogStart;
 float FogEnd;
 float Time;
+float UnderwaterFactor;
 texture BlockAtlas;
 
 float hash(float n)
@@ -83,13 +85,13 @@ float4 MainPS(VertexOutput input) : COLOR0
     float3 sunDir = normalize(-SunDirection);
 
     float diffuse = saturate(dot(normal, sunDir));
-    float wrappedDiffuse = saturate(diffuse * 0.2 + 0.8);
-    float backLight = pow(saturate(dot(normal, -sunDir)), 1.8) * 0.01;
+    float wrappedDiffuse = saturate(diffuse * 0.60 + 0.50);
+    float backLight = pow(saturate(dot(normal, -sunDir)), 1.8) * 0.02;
     float topLight = saturate(normal.y * 0.5 + 0.5);
     float fresnel = pow(1.0 - saturate(dot(normal, viewDir)), 2.2);
-    float horizonLight = saturate(1.0 - abs(normal.y)) * 0.02;
+    float horizonLight = saturate(1.0 - abs(normal.y)) * 0.035;
 
-    float faceShade = normal.y > 0.5 ? 1.0 : (abs(normal.x) > 0.5 ? 0.72 : 0.84);
+    float faceShade = normal.y > 0.5 ? 1.0 : (abs(normal.x) > 0.5 ? 0.84 : 0.92);
 
     float worldVariation = sin(input.WorldPosition.x * 0.17 + Time * 0.1) * cos(input.WorldPosition.z * 0.14 - Time * 0.08);
     float variationMask = worldVariation * 0.02;
@@ -100,9 +102,9 @@ float4 MainPS(VertexOutput input) : COLOR0
     float4 texColor = tex2D(AtlasSampler, input.TexCoord);
     float3 baseColor = texColor.rgb * input.Color.rgb;
     baseColor = saturate(baseColor * faceShade + variationMask.xxx + grain.xxx + float3(heightTint * 0.18, heightTint * 0.22, heightTint * 0.08));
-    float3 ambient = AmbientColor * lerp(0.96, 1.08, topLight);
-    float3 sunlight = SunColor * wrappedDiffuse * 0.22;
-    float3 rimLight = lerp(HorizonColor, ZenithColor, topLight) * fresnel * 0.025;
+    float3 ambient = AmbientColor * lerp(1.06, 1.26, topLight);
+    float3 sunlight = SunColor * wrappedDiffuse * 0.82;
+    float3 rimLight = lerp(HorizonColor, ZenithColor, topLight) * fresnel * 0.03;
     float3 bounceLight = input.FogTint * horizonLight;
 
     float3 litColor = baseColor * (ambient + sunlight + bounceLight) + rimLight + backLight.xxx;
@@ -114,13 +116,21 @@ float4 MainPS(VertexOutput input) : COLOR0
     distanceFade = lerp(0.82, 1.0, distanceFade);
 
     float heightFog = saturate(1.0 - input.WorldPosition.y / 36.0);
-    float horizonBlend = saturate(0.55 + normal.y * 0.45);
-    float3 atmosphericFog = lerp(HorizonColor, ZenithColor, horizonBlend * 0.65 + 0.2);
-    atmosphericFog = lerp(atmosphericFog, FogColor, 0.86 + heightFog * 0.08);
+    float horizonBlend = saturate(viewDir.y * 0.5 + 0.5);
+    float sunGlow = pow(max(0.0, dot(viewDir, sunDir)), 48.0) + pow(max(0.0, dot(viewDir, sunDir)), 4.0) * 0.25;
+    float daylightFactor = saturate((SunDirection.y + 0.10) / 0.32);
+    daylightFactor = daylightFactor * daylightFactor * (3.0 - 2.0 * daylightFactor);
+    float3 daySky = lerp(float3(0.94, 0.97, 1.0), float3(0.42, 0.72, 1.0), horizonBlend);
+    float3 nightSky = lerp(float3(0.04, 0.05, 0.09), float3(0.01, 0.02, 0.05), horizonBlend);
+    float3 backgroundColor = lerp(nightSky, daySky, daylightFactor);
+    backgroundColor += sunGlow * float3(1.0, 0.90, 0.62);
+    float3 atmosphericFog = lerp(backgroundColor, FogColor, lerp(0.28, 0.10, daylightFactor) + heightFog * 0.08);
+    atmosphericFog = lerp(atmosphericFog, UnderwaterFogColor, UnderwaterFactor);
 
     float3 finalColor = lerp(litColor * distanceFade, atmosphericFog, fogFactor);
+    finalColor = lerp(finalColor, finalColor * float3(0.72, 0.86, 0.96), UnderwaterFactor * 0.55);
     finalColor = saturate(finalColor);
-    finalColor = pow(finalColor, 1.0 / 1.01);
+    finalColor = pow(finalColor, 1.0 / 1.22);
 
     return float4(finalColor, texColor.a * input.Color.a);
 }
