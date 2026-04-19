@@ -13,6 +13,7 @@ public enum BlockTextureId
     Stone,
     Sand,
     Water,
+    Torch,
     LogSide,
     LogTop,
     Leaves
@@ -32,6 +33,7 @@ public sealed class BlockTextureAtlas
             (BlockTextureId.Stone, "Textures/blocks/stone"),
             (BlockTextureId.Sand, "Textures/blocks/sand"),
             (BlockTextureId.Water, "Textures/blocks/water_still"),
+            (BlockTextureId.Torch, "Textures/blocks/torch_on"),
             (BlockTextureId.LogSide, "Textures/blocks/log_oak"),
             (BlockTextureId.LogTop, "Textures/blocks/log_oak_top"),
             (BlockTextureId.Leaves, "Textures/blocks/leaves_oak_opaque")

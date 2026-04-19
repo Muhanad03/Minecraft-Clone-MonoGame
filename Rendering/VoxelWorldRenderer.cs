@@ -10,6 +10,7 @@ namespace NewProject.Rendering;
 
 public sealed class VoxelWorldRenderer : IDisposable
 {
+    private const int MaxTorchLights = 16;
     private const float SunMovementSpeed = 0.035f;
     private static readonly int[] SunPattern =
     [
@@ -39,6 +40,7 @@ public sealed class VoxelWorldRenderer : IDisposable
     private ChunkRenderData? _cloudRenderData;
     private Point _cloudMeshCenterCell;
     private bool _cloudMeshValid;
+    private readonly Vector4[] _torchLightBuffer = new Vector4[MaxTorchLights];
 
     public ViewModelSettings ViewModelSettings { get; } = new();
 
@@ -56,9 +58,9 @@ public sealed class VoxelWorldRenderer : IDisposable
         Vector3 sunDirection = GetSunDirection(time);
         float daylight = MathHelper.Clamp((sunDirection.Y + 0.10f) / 0.32f, 0f, 1f);
         daylight = daylight * daylight * (3f - 2f * daylight);
-        Vector3 horizon = Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.90f, 0.95f, 1.00f), daylight);
-        Vector3 zenith = Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.42f, 0.72f, 1.00f), daylight);
-        Vector3 sky = Vector3.Lerp(horizon, zenith, 0.58f) * MathHelper.Lerp(0.20f, 1.34f, daylight);
+        Vector3 horizon = Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.74f, 0.84f, 0.97f), daylight);
+        Vector3 zenith = Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.26f, 0.56f, 0.92f), daylight);
+        Vector3 sky = Vector3.Lerp(horizon, zenith, 0.58f) * MathHelper.Lerp(0.20f, 1.06f, daylight);
         return new Color(Vector3.Clamp(sky, Vector3.Zero, Vector3.One));
     }
 
@@ -189,9 +191,13 @@ public sealed class VoxelWorldRenderer : IDisposable
         float daylight = MathHelper.Clamp((sunDirection.Y + 0.10f) / 0.32f, 0f, 1f);
         daylight = daylight * daylight * (3f - 2f * daylight);
 
+        DrawStars(cameraPosition, view, projection, daylight, time);
+        DrawMeteors(cameraPosition, view, projection, daylight, time);
+
         _graphicsDevice.DepthStencilState = DepthStencilState.Default;
         _graphicsDevice.RasterizerState = _rasterizerState;
         _graphicsDevice.BlendState = BlendState.Opaque;
+        ApplyTorchLights(cameraPosition, daylight);
         _effect.Parameters["World"]?.SetValue(Matrix.Identity);
         _effect.Parameters["View"]?.SetValue(view);
         _effect.Parameters["Projection"]?.SetValue(projection);
@@ -199,11 +205,11 @@ public sealed class VoxelWorldRenderer : IDisposable
         _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
         _effect.Parameters["Time"]?.SetValue(time);
         _effect.Parameters["SunDirection"]?.SetValue(sunDirection);
-        _effect.Parameters["AmbientColor"]?.SetValue(Vector3.Lerp(new Vector3(0.06f, 0.07f, 0.10f), new Vector3(1.10f, 1.16f, 1.22f), daylight));
-        _effect.Parameters["SunColor"]?.SetValue(Vector3.Lerp(new Vector3(0.03f, 0.04f, 0.08f), new Vector3(1.55f, 1.38f, 1.10f), daylight));
-        _effect.Parameters["HorizonColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.90f, 0.95f, 1.00f), daylight));
-        _effect.Parameters["ZenithColor"]?.SetValue(Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.42f, 0.72f, 1.00f), daylight));
-        _effect.Parameters["FogColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.92f, 0.97f, 1.00f), daylight));
+        _effect.Parameters["AmbientColor"]?.SetValue(Vector3.Lerp(new Vector3(0.06f, 0.07f, 0.10f), new Vector3(0.82f, 0.88f, 0.96f), daylight));
+        _effect.Parameters["SunColor"]?.SetValue(Vector3.Lerp(new Vector3(0.03f, 0.04f, 0.08f), new Vector3(1.18f, 1.10f, 0.92f), daylight));
+        _effect.Parameters["HorizonColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.74f, 0.84f, 0.97f), daylight));
+        _effect.Parameters["ZenithColor"]?.SetValue(Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.26f, 0.56f, 0.92f), daylight));
+        _effect.Parameters["FogColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.78f, 0.88f, 0.97f), daylight));
         _effect.Parameters["UnderwaterFogColor"]?.SetValue(new Vector3(0.12f, 0.28f, 0.42f));
         _effect.Parameters["ShadowColor"]?.SetValue(new Vector3(1.0f, 1.0f, 1.0f));
         _effect.Parameters["FogStart"]?.SetValue(24f);
@@ -224,7 +230,6 @@ public sealed class VoxelWorldRenderer : IDisposable
 
         DrawWater(view, projection, cameraPosition, time, sunDirection, daylight, underwaterFactor);
 
-        DrawStars(cameraPosition, view, projection, daylight);
         DrawCloudLayer(cameraPosition, time, view, projection, daylight, sunDirection);
         DrawSun(cameraPosition, view, projection, sunDirection);
     }
@@ -236,6 +241,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         Texture2D texture,
         bool isTool,
         ToolType? selectedTool,
+        BlockType selectedBlock,
         float useAnimationTimer,
         float useAnimationDuration)
     {
@@ -357,21 +363,14 @@ public sealed class VoxelWorldRenderer : IDisposable
 
         if (isTool)
         {
-            Vector3 toolDirection =
-                itemForward * settings.ToolForwardFactor +
-                itemRight * settings.ToolRightFactor +
-                itemUp * settings.ToolUpFactor;
-
-            Vector3 toolForward = Vector3.Normalize(toolDirection);
-            Vector3 toolRight = Vector3.Normalize(Vector3.Cross(itemUp, toolForward));
-            if (toolRight.LengthSquared() < 0.001f)
-            {
-                toolRight = itemRight;
-            }
-
-            Vector3 toolUp = Vector3.Normalize(Vector3.Cross(toolForward, toolRight));
+            float toolTilt = MathHelper.ToRadians(settings.ToolScreenTiltDegrees);
+            Vector3 toolRight = Vector3.Normalize(right * MathF.Cos(toolTilt) + up * MathF.Sin(toolTilt));
+            Vector3 toolUp = Vector3.Normalize(-right * MathF.Sin(toolTilt) + up * MathF.Cos(toolTilt));
+            Vector3 toolForward = forward;
             Vector3 toolCenter =
                 itemCenter +
+                right * settings.ToolScreenRightOffset +
+                up * settings.ToolScreenUpOffset +
                 toolRight * settings.ToolSideOffset +
                 toolUp * settings.ToolUpOffset +
                 toolForward * settings.ToolForwardOffset;
@@ -399,31 +398,67 @@ public sealed class VoxelWorldRenderer : IDisposable
         }
         else
         {
-            Vector3 blockForward = Vector3.Normalize(
-                itemForward * settings.BlockForwardFactor +
-                itemRight * settings.BlockRightFactor +
-                itemUp * settings.BlockUpFactor);
-            Vector3 blockRight = Vector3.Normalize(Vector3.Cross(itemUp, blockForward));
-            if (blockRight.LengthSquared() < 0.001f)
+            bool flatItem = selectedBlock == BlockType.Torch;
+            if (flatItem)
             {
-                blockRight = itemRight;
-            }
+                Vector3 itemDirection = Vector3.Normalize(
+                    itemForward * settings.ToolForwardFactor +
+                    itemRight * settings.ToolRightFactor +
+                    itemUp * settings.ToolUpFactor);
+                Vector3 flatRight = Vector3.Normalize(Vector3.Cross(itemUp, itemDirection));
+                if (flatRight.LengthSquared() < 0.001f)
+                {
+                    flatRight = itemRight;
+                }
 
-            Vector3 blockUp = Vector3.Normalize(Vector3.Cross(blockForward, blockRight));
-            Vector3 blockCenter =
-                itemCenter +
-                blockRight * settings.BlockSideOffset +
-                blockUp * settings.BlockUpOffset +
-                blockForward * settings.BlockForwardOffset;
-            AddTexturedCube(
-                itemVertices,
-                itemIndices,
-                blockCenter,
-                blockRight,
-                blockUp,
-                blockForward,
-                settings.BlockSize,
-                Color.White);
+                Vector3 flatUp = Vector3.Normalize(Vector3.Cross(itemDirection, flatRight));
+                Vector3 flatCenter =
+                    itemCenter +
+                    flatRight * settings.ToolSideOffset +
+                    flatUp * settings.ToolUpOffset +
+                    itemDirection * settings.ToolForwardOffset;
+                flatCenter +=
+                    flatRight * settings.ToolGripRightOffset +
+                    flatUp * (settings.ToolGripUpOffset * 0.65f);
+
+                AddTexturedQuad(
+                    itemVertices,
+                    itemIndices,
+                    flatCenter,
+                    flatRight,
+                    -flatUp,
+                    settings.ToolWidth * 0.58f,
+                    settings.ToolHeight * 0.72f,
+                    Color.White);
+            }
+            else
+            {
+                Vector3 blockForward = Vector3.Normalize(
+                    itemForward * settings.BlockForwardFactor +
+                    itemRight * settings.BlockRightFactor +
+                    itemUp * settings.BlockUpFactor);
+                Vector3 blockRight = Vector3.Normalize(Vector3.Cross(itemUp, blockForward));
+                if (blockRight.LengthSquared() < 0.001f)
+                {
+                    blockRight = itemRight;
+                }
+
+                Vector3 blockUp = Vector3.Normalize(Vector3.Cross(blockForward, blockRight));
+                Vector3 blockCenter =
+                    itemCenter +
+                    blockRight * settings.BlockSideOffset +
+                    blockUp * settings.BlockUpOffset +
+                    blockForward * settings.BlockForwardOffset;
+                AddTexturedCube(
+                    itemVertices,
+                    itemIndices,
+                    blockCenter,
+                    blockRight,
+                    blockUp,
+                    blockForward,
+                    settings.BlockSize,
+                    Color.White);
+            }
         }
 
         _viewModelTextureEffect.World = Matrix.Identity;
@@ -473,8 +508,63 @@ public sealed class VoxelWorldRenderer : IDisposable
         return new ChunkRenderSet
         {
             Solid = solid,
-            Water = water
+            Water = water,
+            TorchLights = mesh.TorchLights
         };
+    }
+
+    private void ApplyTorchLights(Vector3 cameraPosition, float daylight)
+    {
+        int count = 0;
+        float[] bestDistances = new float[MaxTorchLights];
+        for (int i = 0; i < MaxTorchLights; i++)
+        {
+            bestDistances[i] = float.MaxValue;
+            _torchLightBuffer[i] = Vector4.Zero;
+        }
+
+        foreach (ChunkRenderSet chunkMesh in _chunkMeshes.Values)
+        {
+            foreach (Vector3 lightPos in chunkMesh.TorchLights)
+            {
+                float distanceSquared = Vector3.DistanceSquared(cameraPosition, lightPos);
+                if (distanceSquared > 18f * 18f)
+                {
+                    continue;
+                }
+
+                if (count < MaxTorchLights)
+                {
+                    _torchLightBuffer[count] = new Vector4(lightPos, 1f);
+                    bestDistances[count] = distanceSquared;
+                    count++;
+                    continue;
+                }
+
+                int worstIndex = 0;
+                float worstDistance = bestDistances[0];
+                for (int i = 1; i < MaxTorchLights; i++)
+                {
+                    if (bestDistances[i] > worstDistance)
+                    {
+                        worstDistance = bestDistances[i];
+                        worstIndex = i;
+                    }
+                }
+
+                if (distanceSquared >= worstDistance)
+                {
+                    continue;
+                }
+
+                _torchLightBuffer[worstIndex] = new Vector4(lightPos, 1f);
+                bestDistances[worstIndex] = distanceSquared;
+            }
+        }
+
+        _effect.Parameters["TorchLights"]?.SetValue(_torchLightBuffer);
+        _effect.Parameters["TorchLightCount"]?.SetValue(count);
+        _effect.Parameters["DaylightFactor"]?.SetValue(daylight);
     }
 
     private ChunkRenderData CreateBufferData(VoxelVertex[] vertices, int[] indices)
@@ -499,6 +589,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         _graphicsDevice.RasterizerState = _rasterizerState;
         _graphicsDevice.BlendState = BlendState.AlphaBlend;
 
+        ApplyTorchLights(cameraPosition, daylight);
         _effect.Parameters["World"]?.SetValue(Matrix.Identity);
         _effect.Parameters["View"]?.SetValue(view);
         _effect.Parameters["Projection"]?.SetValue(projection);
@@ -506,11 +597,11 @@ public sealed class VoxelWorldRenderer : IDisposable
         _effect.Parameters["BlockAtlas"]?.SetValue(_blockTextureAtlas.Texture);
         _effect.Parameters["Time"]?.SetValue(time);
         _effect.Parameters["SunDirection"]?.SetValue(sunDirection);
-        _effect.Parameters["AmbientColor"]?.SetValue(Vector3.Lerp(new Vector3(0.06f, 0.07f, 0.10f), new Vector3(1.10f, 1.16f, 1.22f), daylight));
-        _effect.Parameters["SunColor"]?.SetValue(Vector3.Lerp(new Vector3(0.03f, 0.04f, 0.08f), new Vector3(1.55f, 1.38f, 1.10f), daylight));
-        _effect.Parameters["HorizonColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.90f, 0.95f, 1.00f), daylight));
-        _effect.Parameters["ZenithColor"]?.SetValue(Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.42f, 0.72f, 1.00f), daylight));
-        _effect.Parameters["FogColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.92f, 0.97f, 1.00f), daylight));
+        _effect.Parameters["AmbientColor"]?.SetValue(Vector3.Lerp(new Vector3(0.06f, 0.07f, 0.10f), new Vector3(0.82f, 0.88f, 0.96f), daylight));
+        _effect.Parameters["SunColor"]?.SetValue(Vector3.Lerp(new Vector3(0.03f, 0.04f, 0.08f), new Vector3(1.18f, 1.10f, 0.92f), daylight));
+        _effect.Parameters["HorizonColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.74f, 0.84f, 0.97f), daylight));
+        _effect.Parameters["ZenithColor"]?.SetValue(Vector3.Lerp(new Vector3(0.005f, 0.010f, 0.030f), new Vector3(0.26f, 0.56f, 0.92f), daylight));
+        _effect.Parameters["FogColor"]?.SetValue(Vector3.Lerp(new Vector3(0.015f, 0.020f, 0.045f), new Vector3(0.78f, 0.88f, 0.97f), daylight));
         _effect.Parameters["UnderwaterFogColor"]?.SetValue(new Vector3(0.12f, 0.28f, 0.42f));
         _effect.Parameters["FogStart"]?.SetValue(24f);
         _effect.Parameters["FogEnd"]?.SetValue(120f);
@@ -542,9 +633,9 @@ public sealed class VoxelWorldRenderer : IDisposable
         const float cloudSpacing = 64f;
         const int cloudRadius = 4;
 
-        int centerCellX = (int)MathF.Floor(cameraPosition.X / cloudSpacing);
-        int centerCellZ = (int)MathF.Floor(cameraPosition.Z / cloudSpacing);
         float drift = time * 2.4f;
+        int centerCellX = (int)MathF.Floor((cameraPosition.X - drift) / cloudSpacing);
+        int centerCellZ = (int)MathF.Floor(cameraPosition.Z / cloudSpacing);
 
         EnsureCloudMesh(centerCellX, centerCellZ, cloudHeight, cloudThickness, cloudBlockSize, cloudSpacing, cloudRadius);
         if (_cloudRenderData is null)
@@ -572,7 +663,7 @@ public sealed class VoxelWorldRenderer : IDisposable
         }
     }
 
-    private void DrawStars(Vector3 cameraPosition, Matrix view, Matrix projection, float daylight)
+    private void DrawStars(Vector3 cameraPosition, Matrix view, Matrix projection, float daylight, float time)
     {
         float starVisibility = 1f - daylight;
         if (starVisibility <= 0.02f)
@@ -596,10 +687,12 @@ public sealed class VoxelWorldRenderer : IDisposable
             float v = (((seed >> 10) & 1023) / 1023f);
             float azimuth = u * MathHelper.TwoPi;
             float elevation = MathHelper.Lerp(0.08f, 1.20f, v);
+            float drift = time * 0.008f;
             Vector3 direction = Vector3.Normalize(new Vector3(
                 MathF.Cos(azimuth) * MathF.Cos(elevation),
                 MathF.Sin(elevation),
                 MathF.Sin(azimuth) * MathF.Cos(elevation)));
+            direction = Vector3.TransformNormal(direction, Matrix.CreateRotationY(drift));
 
             if (direction.Y < 0.06f)
             {
@@ -631,6 +724,84 @@ public sealed class VoxelWorldRenderer : IDisposable
         _unlitEffect.Projection = projection;
         _unlitEffect.DiffuseColor = Vector3.One;
         _unlitEffect.Alpha = MathHelper.Lerp(0.35f, 1f, starVisibility);
+
+        foreach (EffectPass pass in _unlitEffect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+            _graphicsDevice.DrawUserIndexedPrimitives(
+                PrimitiveType.TriangleList,
+                vertices.ToArray(),
+                0,
+                vertices.Count,
+                indices.ToArray(),
+                0,
+                indices.Count / 3,
+                VoxelVertex.VertexDeclaration);
+        }
+    }
+
+    private void DrawMeteors(Vector3 cameraPosition, Matrix view, Matrix projection, float daylight, float time)
+    {
+        float visibility = 1f - daylight;
+        if (visibility <= 0.2f)
+        {
+            return;
+        }
+
+        Matrix cameraWorld = Matrix.Invert(view);
+        Vector3 cameraRight = Vector3.Normalize(cameraWorld.Right);
+        Vector3 cameraUp = Vector3.Normalize(cameraWorld.Up);
+        Color[] colors =
+        [
+            new Color(186, 126, 255),
+            new Color(255, 255, 255),
+            new Color(255, 235, 120),
+            new Color(152, 255, 168)
+        ];
+
+        List<VoxelVertex> vertices = new();
+        List<int> indices = new();
+        int cycle = (int)MathF.Floor(time / 3.8f);
+        float cycleProgress = (time / 3.8f) - cycle;
+
+        for (int i = 0; i < colors.Length; i++)
+        {
+            float local = cycleProgress - i * 0.18f;
+            if (local < 0f || local > 0.38f)
+            {
+                continue;
+            }
+
+            float t = local / 0.38f;
+            float azimuth = 0.7f + i * 1.2f + cycle * 0.37f;
+            float elevation = 0.55f + i * 0.08f;
+            Vector3 startDir = Vector3.Normalize(new Vector3(
+                MathF.Cos(azimuth) * MathF.Cos(elevation),
+                MathF.Sin(elevation),
+                MathF.Sin(azimuth) * MathF.Cos(elevation)));
+            Vector3 endDir = Vector3.Normalize(startDir + new Vector3(-0.35f, -0.18f, 0.22f));
+
+            Vector3 headDir = Vector3.Normalize(Vector3.Lerp(startDir, endDir, t));
+            Vector3 tailDir = Vector3.Normalize(Vector3.Lerp(startDir, endDir, MathHelper.Clamp(t - 0.14f, 0f, 1f)));
+            Vector3 head = cameraPosition + headDir * 205f;
+            Vector3 tail = cameraPosition + tailDir * 195f;
+            float width = MathHelper.Lerp(0.35f, 0.85f, visibility);
+            AddTrailQuad(vertices, indices, head, tail, cameraRight, cameraUp, width, colors[i], visibility);
+        }
+
+        if (vertices.Count == 0)
+        {
+            return;
+        }
+
+        _graphicsDevice.DepthStencilState = DepthStencilState.None;
+        _graphicsDevice.RasterizerState = _rasterizerState;
+        _graphicsDevice.BlendState = BlendState.AlphaBlend;
+        _unlitEffect.World = Matrix.Identity;
+        _unlitEffect.View = view;
+        _unlitEffect.Projection = projection;
+        _unlitEffect.DiffuseColor = Vector3.One;
+        _unlitEffect.Alpha = visibility;
 
         foreach (EffectPass pass in _unlitEffect.CurrentTechnique.Passes)
         {
@@ -856,6 +1027,50 @@ public sealed class VoxelWorldRenderer : IDisposable
             center + halfRight + halfUp,
             center + halfRight - halfUp,
             center - halfRight - halfUp);
+    }
+
+    private static void AddTrailQuad(
+        List<VoxelVertex> vertices,
+        List<int> indices,
+        Vector3 head,
+        Vector3 tail,
+        Vector3 cameraRight,
+        Vector3 cameraUp,
+        float width,
+        Color color,
+        float visibility)
+    {
+        Vector3 direction = head - tail;
+        if (direction.LengthSquared() < 0.0001f)
+        {
+            return;
+        }
+
+        direction.Normalize();
+        Vector3 side = Vector3.Normalize(Vector3.Cross(direction, cameraUp));
+        if (side.LengthSquared() < 0.0001f)
+        {
+            side = cameraRight;
+        }
+
+        Vector3 halfSide = side * (width * 0.5f);
+        int start = vertices.Count;
+        Color headColor = new(color.R, color.G, color.B, (byte)(255 * visibility));
+        Color tailColor = new(color.R, color.G, color.B, (byte)(92 * visibility));
+        Vector2 uv = Vector2.Zero;
+        Vector3 normal = Vector3.Normalize(Vector3.Cross(side, direction));
+
+        vertices.Add(new VoxelVertex(head - halfSide, normal, headColor, uv));
+        vertices.Add(new VoxelVertex(head + halfSide, normal, headColor, uv));
+        vertices.Add(new VoxelVertex(tail + halfSide, normal, tailColor, uv));
+        vertices.Add(new VoxelVertex(tail - halfSide, normal, tailColor, uv));
+
+        indices.Add(start);
+        indices.Add(start + 1);
+        indices.Add(start + 2);
+        indices.Add(start);
+        indices.Add(start + 2);
+        indices.Add(start + 3);
     }
 
     private static void AddBox(List<VoxelVertex> vertices, List<int> indices, Vector3 min, Vector3 max)

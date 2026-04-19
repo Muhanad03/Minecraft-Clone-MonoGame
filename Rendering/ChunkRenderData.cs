@@ -1,3 +1,4 @@
+using Microsoft.Xna.Framework;
 using System;
 using Microsoft.Xna.Framework.Graphics;
 
@@ -23,6 +24,8 @@ public sealed class ChunkRenderSet : IDisposable
     public required ChunkRenderData Solid { get; init; }
 
     public ChunkRenderData? Water { get; init; }
+
+    public required Vector3[] TorchLights { get; init; }
 
     public void Dispose()
     {

@@ -9,5 +9,6 @@ public enum BlockType : byte
     Trunk = 4,
     Leaves = 5,
     Water = 6,
-    Sand = 7
+    Sand = 7,
+    Torch = 8
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Input;
 using NewProject.Player;
@@ -108,7 +109,8 @@ public sealed class WorldInteractionController
                 continue;
             }
 
-            if (_world.IsSolid(current.X, current.Y, current.Z))
+            BlockType target = _world.GetBlock(current.X, current.Y, current.Z);
+            if (target != BlockType.Air && target != BlockType.Water)
             {
                 rayHit = new BlockRayHit(current, previous);
                 return hasPrevious;
@@ -130,7 +132,8 @@ public sealed class WorldInteractionController
             return;
         }
 
-        if (_world.SetBlock(hitBlock.X, hitBlock.Y, hitBlock.Z, BlockType.Air))
+        BlockType replacement = CanFloodFromWater(hitBlock) ? BlockType.Water : BlockType.Air;
+        if (_world.SetBlock(hitBlock.X, hitBlock.Y, hitBlock.Z, replacement))
         {
             _hotbar.AddBlock(block);
             MarkAffectedChunksDirty(hitBlock.X, hitBlock.Z);
@@ -144,7 +147,18 @@ public sealed class WorldInteractionController
             return;
         }
 
-        if (_world.IsSolid(placeBlock.X, placeBlock.Y, placeBlock.Z))
+        if (_world.GetBlock(placeBlock.X, placeBlock.Y, placeBlock.Z) != BlockType.Air &&
+            _world.GetBlock(placeBlock.X, placeBlock.Y, placeBlock.Z) != BlockType.Water)
+        {
+            return;
+        }
+
+        if (block == BlockType.Torch && !_world.IsSolid(placeBlock.X, placeBlock.Y - 1, placeBlock.Z))
+        {
+            return;
+        }
+
+        if (block == BlockType.Torch && _world.GetBlock(placeBlock.X, placeBlock.Y, placeBlock.Z) == BlockType.Water)
         {
             return;
         }
@@ -195,5 +209,63 @@ public sealed class WorldInteractionController
     {
         LastAnimatedTool = tool;
         UseAnimationTimer = UseAnimationDuration;
+    }
+
+    private bool CanFloodFromWater(Point3 start)
+    {
+        Queue<Point3> open = new();
+        HashSet<Point3> visited = new();
+        open.Enqueue(start);
+        visited.Add(start);
+
+        const int maxVisited = 160;
+        const int maxHorizontalDistance = 6;
+        const int maxVerticalDistance = 8;
+
+        while (open.Count > 0 && visited.Count <= maxVisited)
+        {
+            Point3 current = open.Dequeue();
+
+            foreach (Point3 next in EnumerateNeighbors(current))
+            {
+                if (visited.Contains(next))
+                {
+                    continue;
+                }
+
+                if (Math.Abs(next.X - start.X) > maxHorizontalDistance ||
+                    Math.Abs(next.Z - start.Z) > maxHorizontalDistance ||
+                    Math.Abs(next.Y - start.Y) > maxVerticalDistance)
+                {
+                    continue;
+                }
+
+                BlockType block = _world.GetBlock(next.X, next.Y, next.Z);
+                if (block == BlockType.Water)
+                {
+                    return true;
+                }
+
+                if (block != BlockType.Air)
+                {
+                    continue;
+                }
+
+                visited.Add(next);
+                open.Enqueue(next);
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Point3> EnumerateNeighbors(Point3 point)
+    {
+        yield return new Point3(point.X + 1, point.Y, point.Z);
+        yield return new Point3(point.X - 1, point.Y, point.Z);
+        yield return new Point3(point.X, point.Y + 1, point.Z);
+        yield return new Point3(point.X, point.Y - 1, point.Z);
+        yield return new Point3(point.X, point.Y, point.Z + 1);
+        yield return new Point3(point.X, point.Y, point.Z - 1);
     }
 }

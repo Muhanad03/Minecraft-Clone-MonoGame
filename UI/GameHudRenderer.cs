@@ -27,6 +27,7 @@ public sealed class GameHudRenderer : IDisposable
         _blockIcons[BlockType.Dirt] = content.Load<Texture2D>("Textures/blocks/dirt");
         _blockIcons[BlockType.Stone] = content.Load<Texture2D>("Textures/blocks/stone");
         _blockIcons[BlockType.Sand] = content.Load<Texture2D>("Textures/blocks/sand");
+        _blockIcons[BlockType.Torch] = content.Load<Texture2D>("Textures/blocks/torch_on");
         _blockIcons[BlockType.Trunk] = content.Load<Texture2D>("Textures/blocks/log_oak_top");
         _blockIcons[BlockType.Leaves] = content.Load<Texture2D>("Textures/blocks/leaves_oak_opaque");
 

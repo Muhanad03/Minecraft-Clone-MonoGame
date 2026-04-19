@@ -10,6 +10,7 @@ public sealed class PlayerController
     private const float MouseSensitivity = 0.0032f;
     private const float MoveSpeed = 6.8f;
     private const float SprintMultiplier = 1.55f;
+    private const float FlySpeed = 11f;
     private const float Gravity = 28f;
     private const float JumpVelocity = 10.5f;
     private const float HalfWidth = 0.33f;
@@ -22,6 +23,7 @@ public sealed class PlayerController
     private float _verticalVelocity;
     private float _yaw = -MathHelper.PiOver2;
     private float _pitch = -0.22f;
+    private float _fieldOfView = MathHelper.PiOver4;
     private bool _isGrounded;
     private bool _mouseLookReady;
     private float _stepVisualOffset;
@@ -35,6 +37,8 @@ public sealed class PlayerController
 
     public Vector3 Position => _position;
 
+    public bool IsFlying { get; private set; }
+
     public BoundingBox Bounds => new(
         new Vector3(_position.X - HalfWidth, _position.Y, _position.Z - HalfWidth),
         new Vector3(_position.X + HalfWidth, _position.Y + Height, _position.Z + HalfWidth));
@@ -43,7 +47,13 @@ public sealed class PlayerController
 
     public Matrix GetProjectionMatrix(float aspectRatio)
     {
-        return Matrix.CreatePerspectiveFieldOfView(MathHelper.PiOver4, aspectRatio, 0.1f, 260f);
+        return Matrix.CreatePerspectiveFieldOfView(_fieldOfView, aspectRatio, 0.1f, 260f);
+    }
+
+    public float FieldOfViewDegrees
+    {
+        get => MathHelper.ToDegrees(_fieldOfView);
+        set => _fieldOfView = MathHelper.Clamp(MathHelper.ToRadians(value), MathHelper.ToRadians(55f), MathHelper.ToRadians(100f));
     }
 
     public void Teleport(Vector3 position)
@@ -51,6 +61,14 @@ public sealed class PlayerController
         _position = position;
         _verticalVelocity = 0f;
         _isGrounded = false;
+        _stepVisualOffset = 0f;
+    }
+
+    public void ToggleFly()
+    {
+        IsFlying = !IsFlying;
+        _verticalVelocity = 0f;
+        _isGrounded = IsFlying || _isGrounded;
         _stepVisualOffset = 0f;
     }
 
@@ -66,6 +84,12 @@ public sealed class PlayerController
 
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
         KeyboardState keyboard = Keyboard.GetState();
+
+        if (IsFlying)
+        {
+            UpdateFlying(keyboard, dt, world);
+            return;
+        }
 
         Vector3 horizontalMove = GetMovementInput(keyboard) * MoveSpeed * (keyboard.IsKeyDown(Keys.LeftShift) ? SprintMultiplier : 1f) * dt;
 
@@ -154,6 +178,61 @@ public sealed class PlayerController
         }
 
         return movement;
+    }
+
+    private void UpdateFlying(KeyboardState keyboard, float dt, IBlockWorld world)
+    {
+        Vector3 look = GetLookDirection();
+        Vector3 horizontalLook = new(look.X, 0f, look.Z);
+        if (horizontalLook.LengthSquared() < 0.0001f)
+        {
+            horizontalLook = Vector3.Forward;
+        }
+
+        horizontalLook.Normalize();
+        Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.Up, horizontalLook));
+        Vector3 movement = Vector3.Zero;
+
+        if (keyboard.IsKeyDown(Keys.W))
+        {
+            movement += look;
+        }
+
+        if (keyboard.IsKeyDown(Keys.S))
+        {
+            movement -= look;
+        }
+
+        if (keyboard.IsKeyDown(Keys.A))
+        {
+            movement += right;
+        }
+
+        if (keyboard.IsKeyDown(Keys.D))
+        {
+            movement -= right;
+        }
+
+        if (keyboard.IsKeyDown(Keys.Space))
+        {
+            movement += Vector3.Up;
+        }
+
+        if (keyboard.IsKeyDown(Keys.LeftControl) || keyboard.IsKeyDown(Keys.RightControl))
+        {
+            movement += Vector3.Down;
+        }
+
+        if (movement != Vector3.Zero)
+        {
+            movement.Normalize();
+        }
+
+        float speed = FlySpeed * (keyboard.IsKeyDown(Keys.LeftShift) ? SprintMultiplier : 1f);
+        _position += movement * speed * dt;
+        _position.Y = MathHelper.Clamp(_position.Y, 1f, world.Height - Height - 0.1f);
+        _verticalVelocity = 0f;
+        _isGrounded = false;
     }
 
     public Vector3 GetLookDirection()

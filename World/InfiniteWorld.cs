@@ -116,6 +116,24 @@ public sealed class InfiniteWorld : IBlockWorld
         return chunk.Voxels.GetBlock(localX, y, localZ);
     }
 
+    public BlockType GetLoadedBlockOrAir(int x, int y, int z)
+    {
+        if (y < 0 || y >= Height)
+        {
+            return BlockType.Air;
+        }
+
+        Point chunkCoord = GetChunkCoordinate(x, z);
+        if (!TryGetLoadedChunk(chunkCoord.X, chunkCoord.Y, out WorldChunk chunk))
+        {
+            return BlockType.Air;
+        }
+
+        int localX = PositiveModulo(x, ChunkSize);
+        int localZ = PositiveModulo(z, ChunkSize);
+        return chunk.Voxels.GetBlock(localX, y, localZ);
+    }
+
     public bool SetBlock(int x, int y, int z, BlockType block)
     {
         if (y < 0 || y >= Height)
